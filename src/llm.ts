@@ -147,6 +147,37 @@ async function getExtractor(): Promise<ExtractorFn> {
   return _extractorLoading;
 }
 
+/**
+ * Trigger the embedding model load in the background so the user's
+ * first search query doesn't pay the ~1.5–5s ONNX pipeline-construction
+ * cost (or worse: the 10–30s first-time download).
+ *
+ * Idempotent: shares the same `_extractorLoading` promise as the lazy
+ * `getExtractor()` path. Calling this twice does not double-load.
+ *
+ * No-op when `ENGRAM_SKIP_EMBED=1` is set — callers in that mode have
+ * already opted out of embeddings entirely, so eager loading would
+ * waste memory and CPU.
+ *
+ * Returns the loading promise so callers can `await` if they want
+ * synchronous readiness; the typical server-boot caller does
+ * `void warmEmbeddings()` and lets it run while the MCP handshake
+ * settles.
+ */
+export function warmEmbeddings(): Promise<void> {
+  if (process.env.ENGRAM_SKIP_EMBED === '1') return Promise.resolve();
+  console.error('przm-memory: pre-warming embedding model in background (first query will not pay the cold-start cost)');
+  return getExtractor().then(
+    () => undefined,
+    (err) => {
+      // Don't crash the server — embeddings can fail to load on systems
+      // without the runtime deps installed. Subsequent embed() calls
+      // will hit the same error and fall through to keyword-only mode.
+      console.error('przm-memory: background embedding warmup failed (continuing without):', err);
+    },
+  );
+}
+
 export async function embed(
   config: SmartMemoryConfig,
   text: string,

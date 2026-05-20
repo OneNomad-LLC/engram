@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { Storage } from './storage.js';
 import { buildUpdateMetadataPatch, } from './update-metadata.js';
 import { loadConfig } from './config.js';
-import { isLlmAvailable } from './llm.js';
+import { isLlmAvailable, warmEmbeddings } from './llm.js';
+import { getVersion } from './version.js';
 import { search, selectRelevant, formatRecalledMemories } from './search.js';
 import { graphAwareRerank, graphAwareRerankPPR } from './graph-rerank.js';
 import { extractFromConversation } from './extractor.js';
@@ -44,7 +45,7 @@ function text(t) { return { content: [{ type: 'text', text: t }] }; }
 // including secrets that shouldn't be in tool responses.
 function json(data) { return text(JSON.stringify(data, null, 2)); }
 // ── MCP Server ──────────────────────────────────────────────────────
-const server = new McpServer({ name: 'przm-memory', version: '1.0.0' }, {
+const server = new McpServer({ name: 'przm-memory', version: getVersion() }, {
     instructions: [
         'przm Memory is your long-term memory.',
         '',
@@ -1120,6 +1121,12 @@ async function main() {
     if (config.enableRetrievalTraces) {
         void gcOldTraces({ dataDir: config.dataDir, retentionDays: config.retrievalTraceRetentionDays });
     }
+    // Fire-and-forget warmup of the local embedding model so the user's
+    // first search/recall doesn't pay the 1.5–5s ONNX cold-start cost
+    // (or the 10–30s first-run model download). The MCP handshake +
+    // typical user "what should I ask?" think-time runs in parallel
+    // with this and usually fully overlaps it.
+    void warmEmbeddings();
 }
 main().catch(err => {
     console.error('Fatal error:', err);

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-05-20
+
+### Added
+
+- **`src/version.ts`** — single source of truth for the MCP server's
+  self-reported version. Reads `package.json` once at startup and
+  caches the result. Replaces the hardcoded `'1.0.0'` string in
+  `server.ts` that drifted as soon as v1.0.1 shipped earlier today.
+  The MCP server now identifies itself as `przm-memory@1.0.2` instead
+  of `przm-memory@1.0.0` in client logs and the MCP debugger.
+- **`warmEmbeddings()` in `llm.ts`** — exported helper that triggers
+  the embedding-model pipeline construction. The server now fires
+  this in the background after `server.connect(transport)` so the
+  ~1.5–5s ONNX cold-start cost (or the 10–30s first-time model
+  download) happens during the MCP handshake + user's "what should I
+  ask?" think-time, instead of inside the user's first
+  `memory-search`. No-op when `ENGRAM_SKIP_EMBED=1`. Failures are
+  swallowed (server logs the warning but stays up; `embed()` continues
+  to fall through to keyword-only mode on demand).
+
+### Performance
+
+- **First-query latency drops by the full embedding cold-start cost.**
+  Previously: user opens an MCP client, server boots, accepts the
+  first `memory-search`, then spends 1.5–5s loading the embedding
+  pipeline before any results come back. Now: pipeline starts loading
+  the moment the server connects, so the first search either finds it
+  ready (typical case) or only waits for the residual load time. Hot
+  path is unchanged — this only affects the very first query in each
+  server process.
+
 ## [1.0.1] - 2026-05-20
 
 ### Security
