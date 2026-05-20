@@ -11,6 +11,11 @@
  * Run: `npm test` or `node --import tsx --test tests/update-metadata.test.ts`
  */
 
+// Opt out of credentials-file auto-routing — this round-trips against
+// LanceDB on disk and must not silently hit przm Cloud just because the
+// dev machine has been logged in. See v1.0.1.
+process.env.ENGRAM_NO_AUTO_CLOUD = '1';
+
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

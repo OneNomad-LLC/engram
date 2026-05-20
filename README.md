@@ -357,6 +357,7 @@ Then point your MCP client at `dist/server.js`:
 | `PYRE_API_URL` | (none) | przm server URL for `przm-memory login`. Alternative to the positional arg or `--server` flag — one of the three is required. |
 | `PYRE_API_KEY` | (none) | przm Cloud API key. Overrides the field from `~/.pyre/credentials.json` when set. |
 | `PYRE_CREDENTIALS_FILE` | `~/.pyre/credentials.json` | Override the credentials-file path (CI / headless installs). |
+| `ENGRAM_NO_AUTO_CLOUD` | (unset) | Truthy (`1`/`true`/`yes`/`on`) suppresses the credentials-file probe so `~/.pyre/credentials.json` is ignored even when present. Use for benchmarks, CI, or anywhere you want to guarantee local file mode without deleting the file. Explicit `STORAGE_BACKEND` always wins. |
 
 ### Hosted (przm Cloud)
 
@@ -410,7 +411,9 @@ export PYRE_API_URL=https://przm.sh
 export PYRE_API_KEY=sk_pyre_xxx
 ```
 
-When `STORAGE_BACKEND` is unset, przm Memory probes for `~/.pyre/credentials.json` and uses cloud mode if it finds one. Explicit env vars always win.
+When `STORAGE_BACKEND` is unset, przm Memory probes for `~/.pyre/credentials.json` and uses cloud mode if it finds one. Explicit env vars always win. The routing decision is logged to stderr on startup (`przm-memory: storage=cloud (auto-routed via ~/.pyre/credentials.json) · apiUrl=…`) so it's never silent — if you see a benchmark or local script hitting the wire when you expected local mode, that log line is the first place to look.
+
+To force local file mode without deleting your credentials file (benchmarks, CI, local-only test runs against a real login), set `ENGRAM_NO_AUTO_CLOUD=1`. The probe is skipped, the credentials file is left alone, and the routing log line names the opt-out so it's visible to whoever inherits the environment.
 
 The existing `STORAGE_BACKEND=postgres` self-host path (below) is unaffected — none of this changes anything for users running their own postgres instance.
 

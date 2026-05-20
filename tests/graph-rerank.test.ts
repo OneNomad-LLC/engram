@@ -1,3 +1,8 @@
+// Opt out of credentials-file auto-routing — this exercises the local
+// graph reranker over the file backend and must not silently hit przm
+// Cloud just because the dev machine has been logged in. See v1.0.1.
+process.env.ENGRAM_NO_AUTO_CLOUD = '1';
+
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtempSync, rmSync } from 'node:fs';

@@ -1,23 +1,34 @@
 /**
  * Storage backend factory.
  *
- * Resolution waterfall (in order):
+ * Resolution waterfall (top wins):
  *
- *   1. If `STORAGE_BACKEND` is set explicitly, that wins.
+ *   1. Explicit `STORAGE_BACKEND` env var (or `backend` opt).
  *      - `file`     → LanceDB + filesystem under dataDir.
  *      - `postgres` → pgvector + jsonb. Requires DATABASE_URL and TENANT_ID.
  *      - `cloud`    → przm Cloud HTTP. Requires PYRE_API_URL + PYRE_API_KEY
- *                     (or a populated ~/.pyre/credentials.json). The HTTP
- *                     adapter is a stub today — see src/storage-cloud.ts.
+ *                     (or a valid `~/.pyre/credentials.json`).
  *      Missing accompanying env vars fail fast with a clear error.
  *
- *   2. Otherwise, if `~/.pyre/credentials.json` exists and parses cleanly,
- *      route through the cloud backend using those credentials. Individual
- *      PYRE_API_URL / PYRE_API_KEY env vars override the matching fields
- *      from the file. This is what `przm-memory-mcp login` wires up.
+ *   2. `~/.pyre/credentials.json` present, parses cleanly, AND
+ *      `ENGRAM_NO_AUTO_CLOUD` is not truthy → cloud backend using its
+ *      `api_url` / `api_key`. Individual env vars override per-field:
+ *      `PYRE_API_URL` beats the file's `api_url`, `PYRE_API_KEY` beats
+ *      the file's `api_key`. The startup log line names this routing
+ *      decision so it is never silent — previously this was the source
+ *      of "why is my benchmark hitting the wire" surprises.
  *
- *   3. Otherwise, `file` mode — today's default. Zero env-var change for
- *      users who never run `login`.
+ *   3. Fallback → `file` mode. Unchanged for any user with no
+ *      credentials file and no env vars.
+ *
+ * Opt-out: set `ENGRAM_NO_AUTO_CLOUD=1` to skip step 2 entirely. Useful
+ * for benchmarks, CI, local development against a real credentials file
+ * you don't want consulted, and anywhere "explicit > implicit" matters.
+ *
+ * Corrupt credentials file: if the file exists but fails validation
+ * (malformed JSON, missing fields), we fall through to file mode rather
+ * than crashing the server. The validator logs a warning to stderr from
+ * `readCredentials`; the routing log on this path notes the fallback.
  */
 import type { StorageAdapter } from './storage-adapter.js';
 export type StorageBackend = 'file' | 'postgres' | 'cloud';
@@ -41,6 +52,11 @@ export interface CreateStorageOptions {
  * Resolve which backend to use based on env vars and the presence of
  * a credentials file. See the module-level JSDoc for the full
  * three-tier waterfall.
+ *
+ * Pure-ish: reads env + filesystem (credentialsExist), no construction.
+ * Used by callers that just want to know the resolved string. The full
+ * cred-file validation happens in createStorageAdapter() so this stays
+ * cheap.
  */
 export declare function resolveBackend(explicit?: StorageBackend): StorageBackend;
 /**
