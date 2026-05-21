@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-05-21
+
+### Fixed
+
+- **`npx @onenomad/przm-memory` crashed on startup with
+  `ERR_MODULE_NOT_FOUND` for `web-streams-polyfill/dist/ponyfill.mjs`.**
+  Root cause: `openai@^4.80` → `formdata-node@4.4.1` does a deep
+  `import 'web-streams-polyfill/dist/ponyfill.mjs'`, but
+  `formdata-node@4.4.1` itself declares a dependency on
+  `web-streams-polyfill@4.0.0-beta.3` — and v4 dropped the `.mjs`
+  file from `dist/` (only exposes it through the `exports` field as
+  `./dist/ponyfill.js`). The deep import resolved against v4 and
+  blew up before the MCP transport ever started. Fixed by pinning
+  `web-streams-polyfill` to `^3.3.3` via the package's `overrides`
+  field, which still has `dist/ponyfill.mjs` as a real file. No code
+  changes required.
+
 ## [1.0.2] - 2026-05-20
 
 ### Added
