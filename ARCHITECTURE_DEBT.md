@@ -331,6 +331,37 @@ documented in README.
 
 ---
 
+## Resolved (2026-05-23) — R-007: Drop CSV-string params; use arrays
+
+**Was:** Six MCP-tool params took comma-separated strings and the
+handler `.split(',')`-parsed them:
+- `memory-ingest.tags` (`src/server.ts:280`)
+- `memory-outcome.chunkIds` (`src/server.ts:572`)
+- `memory-handoff-write.completed / nextSteps / openQuestions /
+  fileRefs / decisions` (`src/server.ts:1005-1009`)
+
+A comma in any of those values silently corrupted the field.
+
+**Resolved by:** all six now `z.array(z.string())`. Handlers consume
+arrays directly; the `splitCsv` helper and ad-hoc `.split(',')` calls
+are gone. Tool descriptions updated to drop the "comma-separated" hint.
+
+---
+
+## Resolved (2026-05-23) — R-009: Strip benchmark-only knobs off `memory-ingest`
+
+**Was:** `memory-ingest` exposed `skipKgExtraction`, `skipDailyEntry`,
+and `awaitSideEffects` on the public MCP schema. All three were
+documented as "benchmark harness only" — they wasted tokens (every LLM
+reads every description), invited misuse, and confused tool selection.
+
+**Resolved by:** removed from the MCP schema in `src/server.ts:271+`.
+Production defaults apply on the MCP path. The benchmark harness still
+calls the library entry point in `src/index.ts` directly and continues
+to use these knobs there.
+
+---
+
 ## How to add an entry
 
 Pick the next `DEBT-NNN` number. Stick to this skeleton:

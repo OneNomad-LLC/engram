@@ -277,7 +277,7 @@ server.registerTool(
       content: z.string().describe('The memory to store.'),
       type: z.enum(['fact', 'preference', 'decision', 'context', 'correction']).optional().describe('Memory type.'),
       importance: z.number().min(0).max(1).optional().describe('Importance 0.0-1.0 (default: 0.5).'),
-      tags: z.string().optional().describe('Comma-separated tags.'),
+      tags: z.array(z.string()).optional().describe('Tags.'),
       source: z.string().optional().describe('Source identifier (e.g. stable sourceId from an upstream system). Stored on the chunk and returned on search.'),
       domain: z.string().optional().describe('Domain/project namespace.'),
       topic: z.string().optional().describe('Topic within the domain.'),
@@ -288,12 +288,13 @@ server.registerTool(
       origin: z.enum(['user', 'derived', 'extracted', 'imported']).optional().describe('Provenance. Default "user" — explicit ingest is treated as user-asserted and protected from auto-merge / archive. Set "derived" when the caller is a downstream pipeline writing inferences.'),
       tier: z.enum(['scratch', 'short-term']).optional().describe('Memory tier. "scratch" = session-only, never promoted by consolidation, auto-purged after 24h. Use for exploratory notes you may want to discard. Default short-term.'),
       createdAt: z.string().optional().describe('ISO 8601 timestamp override. Default: ingest time (now). Use this when ingesting memories that ORIGINALLY happened at a different time — meeting notes from yesterday, chat history from last week, dated documents from years ago. The timestamp flows into the contextual prefix embedded with the content, giving the retrieval pipeline a temporal signal it would otherwise lose. Critical for benchmarks (LoCoMo) and real workloads that backfill historical context (Cortex ingest of dated docs, importing chat history from Slack/Discord).'),
-      skipKgExtraction: z.boolean().optional().describe('Skip the per-chunk knowledge-graph triple extraction. Production users should leave this off — KG extraction powers memory-dossier, memory-kg-query, and graph-aware reranking. Benchmark harnesses comparing apples-to-apples vs the standalone locomo bench (which bypasses wal.ts entirely) should set this to true so they measure the same code path.'),
-      skipDailyEntry: z.boolean().optional().describe('Skip the post-batch daily-entry append. Production users should leave this off — daily entries power memory-diary-read and cross-session summaries. Benchmark harnesses set this true alongside skipKgExtraction to match the standalone bench setup.'),
-      awaitSideEffects: z.boolean().optional().describe('When false, KG extraction + daily-entry append run in the BACKGROUND after the chunks land on disk; memory-ingest returns ~5-30x faster. Default true (caller awaits everything). Right for production paths where the agent doesn\'t immediately query the just-written content (chat WAL, vault → przm Memory bridge). Sync mode (true) is right when the caller WILL query within the same turn — bench harnesses, test fixtures, multi-step extraction pipelines.'),
     }),
   },
-  async ({ content, type, importance, tags, source, domain, topic, sentiment, emotionalValence, emotionalArousal, skipDedupe, origin, tier, createdAt, skipKgExtraction, skipDailyEntry, awaitSideEffects }) => {
+  async ({ content, type, importance, tags, source, domain, topic, sentiment, emotionalValence, emotionalArousal, skipDedupe, origin, tier, createdAt }) => {
+    // R-009: benchmark-only knobs (skipKgExtraction, skipDailyEntry,
+    // awaitSideEffects) removed from the public MCP schema. The library
+    // entry point in src/index.ts still accepts them for the benchmark
+    // harness; production defaults apply here.
     const storage = await ensureStorage();
 
     // Auto duplicate check (replaces old engram-check-duplicate tool). Callers
@@ -318,7 +319,7 @@ server.registerTool(
       content,
       type: type as any,
       importance,
-      tags: tags?.split(',').map(t => t.trim()),
+      tags,
       ...(source ? { source } : {}),
       domain,
       topic,
@@ -327,9 +328,6 @@ server.registerTool(
       emotionalArousal,
       origin: origin ?? 'user',
       ...(createdAt ? { createdAt } : {}),
-      ...(skipKgExtraction ? { skipKgExtraction: true } : {}),
-      ...(skipDailyEntry ? { skipDailyEntry: true } : {}),
-      ...(awaitSideEffects === false ? { awaitSideEffects: false } : {}),
       tier,
     }]);
     return json({
@@ -569,14 +567,13 @@ server.registerTool(
     description: 'Record whether recalled memories were helpful, corrected, or irrelevant. Adjusts importance.',
     inputSchema: z.object({
       outcome: z.enum(['helpful', 'corrected', 'irrelevant']).describe('Outcome.'),
-      chunkIds: z.string().describe('Comma-separated memory chunk IDs.'),
+      chunkIds: z.array(z.string()).min(1).describe('Memory chunk IDs.'),
     }),
   },
   async ({ outcome, chunkIds }) => {
     const storage = await ensureStorage();
-    const ids = chunkIds.split(',').map(id => id.trim());
-    await recordRecallOutcome(config, storage, ids, outcome, `mcp-${Date.now()}`);
-    return text(`Recorded ${outcome} outcome for ${ids.length} chunk(s).`);
+    await recordRecallOutcome(config, storage, chunkIds, outcome, `mcp-${Date.now()}`);
+    return text(`Recorded ${outcome} outcome for ${chunkIds.length} chunk(s).`);
   }
 );
 
@@ -1002,26 +999,25 @@ server.registerTool(
       name: z.string().optional().describe('Human-friendly checkpoint name (kebab-case recommended) for list-and-pick resume. Optional — omit for an unnamed timestamped handoff.'),
       reason: z.enum(['compact', 'session-end', 'manual', 'context-pressure']).optional().describe('Why this handoff is being written (default: manual).'),
       sessionId: z.string().optional().describe('Session/conversation ID for cross-referencing.'),
-      completed: z.string().optional().describe('Comma-separated list of what has been completed this session.'),
-      nextSteps: z.string().optional().describe('Comma-separated concrete next actions to take on resume.'),
-      openQuestions: z.string().optional().describe('Comma-separated unresolved questions or blockers.'),
-      fileRefs: z.string().optional().describe('Comma-separated file paths (ideally path:line) the next agent needs.'),
-      decisions: z.string().optional().describe('Comma-separated key decisions made this session.'),
+      completed: z.array(z.string()).optional().describe('What has been completed this session.'),
+      nextSteps: z.array(z.string()).optional().describe('Concrete next actions to take on resume.'),
+      openQuestions: z.array(z.string()).optional().describe('Unresolved questions or blockers.'),
+      fileRefs: z.array(z.string()).optional().describe('File paths (ideally path:line) the next agent needs.'),
+      decisions: z.array(z.string()).optional().describe('Key decisions made this session.'),
       notes: z.string().optional().describe('Free-form additional context, quirks, gotchas.'),
     }),
   },
   async ({ currentTask, name, reason, sessionId, completed, nextSteps, openQuestions, fileRefs, decisions, notes }) => {
-    const splitCsv = (s?: string) => s ? s.split(',').map(x => x.trim()).filter(Boolean) : [];
     const note = writeHandoff(config.dataDir, {
       ...(name ? { name } : {}),
       sessionId: sessionId ?? null,
       reason: reason ?? 'manual',
       currentTask,
-      completed: splitCsv(completed),
-      nextSteps: splitCsv(nextSteps),
-      openQuestions: splitCsv(openQuestions),
-      fileRefs: splitCsv(fileRefs),
-      decisions: splitCsv(decisions),
+      completed: completed ?? [],
+      nextSteps: nextSteps ?? [],
+      openQuestions: openQuestions ?? [],
+      fileRefs: fileRefs ?? [],
+      decisions: decisions ?? [],
       notes: notes ?? '',
     });
     return json({
