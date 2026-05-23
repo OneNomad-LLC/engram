@@ -25,25 +25,25 @@ export interface PressureSignal {
 
 const PLAN_OK = [
   'No action required. Continue working.',
-  'Save any new facts, preferences, or decisions to engram-ingest as they emerge.',
+  'Save any new facts, preferences, or decisions to memory-ingest as they emerge.',
 ];
 
 const PLAN_WARM = [
-  'Save any unsaved facts/preferences/decisions to engram-ingest now — do not batch.',
-  'Update session state with current task/decisions via engram-session.',
+  'Save any unsaved facts/preferences/decisions to memory-ingest now — do not batch.',
+  'Update session state with current task/decisions via memory-session.',
   'Continue working but keep tool outputs lean.',
 ];
 
 const PLAN_HOT = [
-  'IMMEDIATELY call engram-handoff-write with a full "where we left off" snapshot.',
-  'Save unsaved facts to engram-ingest.',
+  'IMMEDIATELY call memory-handoff-write with a full "where we left off" snapshot.',
+  'Save unsaved facts to memory-ingest.',
   'After the handoff is written, invoke /compact yourself — do not wait for the system.',
 ];
 
 const PLAN_CRITICAL = [
   'STOP all other work.',
-  'Call engram-handoff-write RIGHT NOW — reason: "context-pressure". Include currentTask, nextSteps, fileRefs, openQuestions.',
-  'Save any unsaved facts to engram-ingest.',
+  'Call memory-handoff-write RIGHT NOW — reason: "context-pressure". Include currentTask, nextSteps, fileRefs, openQuestions.',
+  'Save any unsaved facts to memory-ingest.',
   'Tell the user the context is near-full and ask permission to /compact or end the session. If no response, compact anyway — losing the handoff is worse than a surprise compact.',
 ];
 
@@ -53,8 +53,8 @@ const PLAN_CRITICAL = [
 // than ride a bloated window into the next phase.
 const PLAN_PHASE_BOUNDARY = [
   'Natural phase boundary detected. This is the right moment to compact — pivots thrash the cache anyway.',
-  'Call engram-handoff-write with reason="compact". Include currentTask (the phase just finished), completed, nextSteps (the phase about to start), fileRefs, decisions.',
-  'Save any unsaved facts from the completed phase via engram-ingest.',
+  'Call memory-handoff-write with reason="compact". Include currentTask (the phase just finished), completed, nextSteps (the phase about to start), fileRefs, decisions.',
+  'Save any unsaved facts from the completed phase via memory-ingest.',
   'Invoke /compact yourself before starting the next phase. Do not carry verbose tool outputs from the finished work into the new one.',
 ];
 

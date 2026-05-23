@@ -85,6 +85,7 @@ export class PostgresStorageAdapter implements StorageAdapter {
     this.pool = new Pool({
       connectionString: this.databaseUrl,
       max: this.maxConnections,
+      ssl: resolvePostgresSsl(this.databaseUrl),
     }) as PgPool;
   }
 
@@ -384,17 +385,18 @@ export class PostgresStorageAdapter implements StorageAdapter {
   // ── Knowledge Triples ────────────────────────────────────────────
 
   async saveTriple(triple: KnowledgeTriple): Promise<void> {
-    await this.pool.query(
+    // R-002 + R-004: insert with confidence; use the partial UNIQUE index
+    // (knowledge_triples_active_spo_idx) as the conflict target so that
+    // concurrent addTriple calls for the same active SPO do not produce
+    // duplicate rows.  When a conflict fires (DO NOTHING, rowCount = 0)
+    // we bump confidence on the surviving row instead.
+    const result = await this.pool.query(
       `INSERT INTO knowledge_triples
-         (id, tenant_id, subject, predicate, object, source_id, invalidated_at, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (id) DO UPDATE SET
-         tenant_id = EXCLUDED.tenant_id,
-         subject = EXCLUDED.subject,
-         predicate = EXCLUDED.predicate,
-         object = EXCLUDED.object,
-         source_id = EXCLUDED.source_id,
-         invalidated_at = EXCLUDED.invalidated_at`,
+         (id, tenant_id, subject, predicate, object, source_id, confidence, invalidated_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (tenant_id, subject, predicate, object)
+         WHERE invalidated_at IS NULL
+       DO NOTHING`,
       [
         triple.id,
         this.tenantId,
@@ -402,10 +404,28 @@ export class PostgresStorageAdapter implements StorageAdapter {
         triple.predicate,
         triple.object,
         triple.source ?? '',
+        triple.confidence ?? 0.5,
         triple.validTo ?? null,
         triple.createdAt,
       ],
     );
+
+    if ((result.rowCount ?? 0) === 0) {
+      // An active triple with this SPO already exists (either a
+      // concurrent race or an explicit addTriple on a known triple).
+      // Bump its confidence, mirroring the app-level logic in
+      // knowledge-graph.ts addTriple.
+      await this.pool.query(
+        `UPDATE knowledge_triples
+            SET confidence = LEAST(1.0, confidence + 0.1)
+          WHERE tenant_id = $1
+            AND subject   = $2
+            AND predicate = $3
+            AND object    = $4
+            AND invalidated_at IS NULL`,
+        [this.tenantId, triple.subject, triple.predicate, triple.object],
+      );
+    }
     // valid_from is part of the domain object but not in the spec's
     // schema — fold it into source_id-adjacent metadata is overkill;
     // we keep validFrom == createdAt for postgres mode and surface
@@ -422,7 +442,7 @@ export class PostgresStorageAdapter implements StorageAdapter {
     if (opts?.activeOnly) conds.push(`invalidated_at IS NULL`);
 
     const { rows } = await this.pool.query(
-      `SELECT id, subject, predicate, object, source_id, invalidated_at, created_at
+      `SELECT id, subject, predicate, object, source_id, confidence, invalidated_at, created_at
          FROM knowledge_triples
         WHERE ${conds.join(' AND ')}`,
       params,
@@ -440,7 +460,7 @@ export class PostgresStorageAdapter implements StorageAdapter {
 
   async getTripleTimeline(entity: string): Promise<KnowledgeTriple[]> {
     const { rows } = await this.pool.query(
-      `SELECT id, subject, predicate, object, source_id, invalidated_at, created_at
+      `SELECT id, subject, predicate, object, source_id, confidence, invalidated_at, created_at
          FROM knowledge_triples
         WHERE tenant_id = $1 AND (subject = $2 OR object = $2)
         ORDER BY created_at ASC`,
@@ -581,6 +601,45 @@ export class PostgresStorageAdapter implements StorageAdapter {
   }
 }
 
+// ── SSL resolution ─────────────────────────────────────────────────
+
+/**
+ * Determine the ssl option for the pg Pool constructor.
+ *
+ * Cloud Postgres (Supabase, Neon, Heroku, RDS) requires SSL. Localhost
+ * and explicit opt-out do not.
+ *
+ * R-005: previously the Pool was created without ssl at all, which
+ * caused plaintext connections on cloud providers that require
+ * sslmode=require.
+ *
+ * Opt-out: set ENGRAM_PG_SSL=off to disable SSL (Docker, tunnels, etc.)
+ */
+export function resolvePostgresSsl(
+  connectionString: string,
+): false | { rejectUnauthorized: boolean } {
+  // Explicit opt-out via env var — useful in Docker, SSH tunnels,
+  // and any environment where the hostname isn't localhost but SSL
+  // is not configured.
+  const envOverride = process.env.ENGRAM_PG_SSL?.toLowerCase();
+  if (envOverride === 'off' || envOverride === 'false' || envOverride === '0') return false;
+  if (envOverride === 'on' || envOverride === 'true' || envOverride === '1') {
+    return { rejectUnauthorized: true };
+  }
+
+  // Localhost never needs SSL.
+  if (
+    connectionString.includes('localhost') ||
+    connectionString.includes('127.0.0.1') ||
+    connectionString.includes('[::1]')
+  ) {
+    return false;
+  }
+
+  // All other cloud / remote hosts default to SSL required.
+  return { rejectUnauthorized: true };
+}
+
 // ── Filter translation ──────────────────────────────────────────────
 
 /**
@@ -657,7 +716,7 @@ function pgRowToTriple(row: any): KnowledgeTriple {
     predicate: row.predicate,
     object: row.object,
     source: row.source_id ?? '',
-    confidence: 0.5, // not promoted to a column; defaulted
+    confidence: row.confidence != null ? Number(row.confidence) : 0.5,
     validFrom: created,
     validTo: invalidated,
     createdAt: created,

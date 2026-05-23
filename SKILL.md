@@ -1,11 +1,11 @@
 ---
-name: engram
+name: przm-memory
 description: Intelligent memory manager with LLM-powered extraction, hybrid ANN vector+keyword search, tier lifecycle, spreading activation, procedural rules, WAL capture, and session-state hot RAM. Use when the user asks about memory, preferences, or past conversations.
-homepage: https://github.com/OneNomad-LLC/engram-mcp
-metadata: {"version":"1.0.0-beta.2","categories":["memory","intelligence","personalization"]}
+homepage: https://github.com/OneNomad-LLC/przm-memory
+metadata: {"version":"1.0.0-beta.7","categories":["memory","intelligence","personalization"]}
 ---
 
-# Engram Memory Manager
+# przm Memory
 
 An intelligent memory system that automatically extracts, stores, searches, and maintains memories from conversations. Inspired by cognitive science research on memory consolidation, spreading activation, and reconsolidation.
 

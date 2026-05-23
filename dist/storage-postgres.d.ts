@@ -70,3 +70,18 @@ export declare class PostgresStorageAdapter implements StorageAdapter {
     readHandoff(stamp?: string): Promise<HandoffNote | null>;
     listHandoffs(limit?: number): Promise<HandoffSummary[]>;
 }
+/**
+ * Determine the ssl option for the pg Pool constructor.
+ *
+ * Cloud Postgres (Supabase, Neon, Heroku, RDS) requires SSL. Localhost
+ * and explicit opt-out do not.
+ *
+ * R-005: previously the Pool was created without ssl at all, which
+ * caused plaintext connections on cloud providers that require
+ * sslmode=require.
+ *
+ * Opt-out: set ENGRAM_PG_SSL=off to disable SSL (Docker, tunnels, etc.)
+ */
+export declare function resolvePostgresSsl(connectionString: string): false | {
+    rejectUnauthorized: boolean;
+};

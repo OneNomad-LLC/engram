@@ -457,57 +457,59 @@ For shared/cloud deployments where many users share one process, it also speaks 
 
 ## Tools
 
-The MCP server exposes 20 tools across six groups. Several earlier tools (`engram-format`, `engram-check-duplicate`, `engram-extract-rules`, `engram-taxonomy`, `engram-kg-stats`) were folded into their parent tools in 1.0.0-beta.6 — pass the relevant flag or mode to the parent instead. 1.0.0-beta.8 added the Handoff tools for cross-session continuity. 1.0.0 adds the memory origin field (user vs derived), the scratch tier, and `engram-scratch-promote`.
+The MCP server exposes 20 tools across six groups. Several earlier tools (`engram-format`, `engram-check-duplicate`, `engram-extract-rules`, `engram-taxonomy`, `engram-kg-stats`) were folded into their parent tools in 1.0.0-beta.6 — pass the relevant flag or mode to the parent instead. 1.0.0-beta.8 added the Handoff tools for cross-session continuity. 1.0.0 adds the memory origin field (user vs derived), the scratch tier, and `memory-scratch-promote`.
+
+> **Backward compatibility:** tools were renamed from `engram-*` to `memory-*` in v1.0.0-beta.7. The server still registers `engram-*` aliases so existing installations keep working, but new configs should use `memory-*`. The aliases will be removed in v2.
 
 ### Core Memory
 
 | Tool | What it does |
 |------|-------------|
-| `engram-search` | Hybrid ANN + keyword search with spreading activation. Supports a formatted output mode for prompt injection (replaces the old `engram-format`). |
-| `engram-ingest` | Write-ahead log: immediately persist a memory before responding. Runs duplicate detection inline (replaces `engram-check-duplicate`). Defaults `origin='user'` since explicit ingest is user-asserted; pass `tier: 'scratch'` for session-only notes. |
-| `engram-scratch-promote` | Graduate a scratch-tier memory to short-term so it survives the 24h auto-purge and enters the normal consolidation lifecycle. |
-| `engram-extract` | Extract memories from a conversation (LLM or heuristic). Rules-only mode replaces the old `engram-extract-rules`. |
-| `engram-maintain` | Run consolidation (decay, promote, link, merge, self-organize). Auto-describes unnamed memories, generates cross-links, and syncs the Persona procedural bridge when both servers are running. |
-| `engram-rules` | Show active procedural rules |
-| `engram-outcome` | Record recall feedback (helpful/corrected/irrelevant) |
-| `engram-session` | Manage session state (hot RAM scratchpad) |
-| `engram-stats` | Memory statistics by tier, layer, type. Includes KG stats, domain/topic taxonomy, and Persona bridge status (replaces `engram-kg-stats` and `engram-taxonomy`). |
+| `memory-search` | Hybrid ANN + keyword search with spreading activation. Supports a formatted output mode for prompt injection (replaces the old `engram-format`). |
+| `memory-ingest` | Write-ahead log: immediately persist a memory before responding. Runs duplicate detection inline (replaces `engram-check-duplicate`). Defaults `origin='user'` since explicit ingest is user-asserted; pass `tier: 'scratch'` for session-only notes. |
+| `memory-scratch-promote` | Graduate a scratch-tier memory to short-term so it survives the 24h auto-purge and enters the normal consolidation lifecycle. |
+| `memory-extract` | Extract memories from a conversation (LLM or heuristic). Rules-only mode replaces the old `engram-extract-rules`. |
+| `memory-maintain` | Run consolidation (decay, promote, link, merge, self-organize). Auto-describes unnamed memories, generates cross-links, and syncs the Persona procedural bridge when both servers are running. |
+| `memory-rules` | Show active procedural rules |
+| `memory-outcome` | Record recall feedback (helpful/corrected/irrelevant) |
+| `memory-session` | Manage session state (hot RAM scratchpad) |
+| `memory-stats` | Memory statistics by tier, layer, type. Includes KG stats, domain/topic taxonomy, and Persona bridge status (replaces `engram-kg-stats` and `engram-taxonomy`). |
 
 ### Knowledge Graph
 
 | Tool | What it does |
 |------|-------------|
-| `engram-kg-add` | Add a subject-predicate-object triple |
-| `engram-kg-query` | Query triples with optional filters |
-| `engram-kg-invalidate` | Mark a fact as no longer valid |
-| `engram-kg-timeline` | Get chronological history of an entity |
+| `memory-kg-add` | Add a subject-predicate-object triple |
+| `memory-kg-query` | Query triples with optional filters |
+| `memory-kg-invalidate` | Mark a fact as no longer valid |
+| `memory-kg-timeline` | Get chronological history of an entity |
 
 ### Diary
 
 | Tool | What it does |
 |------|-------------|
-| `engram-diary-write` | Write a session diary entry |
-| `engram-diary-read` | Read diary entries by date or range |
+| `memory-diary-write` | Write a session diary entry |
+| `memory-diary-read` | Read diary entries by date or range |
 
 ### Handoff (cross-session continuity)
 
 | Tool | What it does |
 |------|-------------|
-| `engram-handoff-write` | Structured "where we left off" snapshot — currentTask, completed, nextSteps, openQuestions, fileRefs, decisions, notes. Written before compaction or session end so a fresh session can resume without re-explanation. |
-| `engram-handoff-read` | Load the latest handoff (or one by stamp; `list=true` for recent stamps). Call at session start to pick up where the prior session left off. |
-| `engram-context-pressure` | Self-assess context window pressure (`ok`/`warm`/`hot`/`critical`) and receive a deterministic action plan — when to save memories, when to write a handoff, when to invoke `/compact`. Pass `phaseBoundary=true` at natural task/phase boundaries to force a proactive compact regardless of level (pivots thrash the cache anyway — compacting at the boundary is a free lunch). |
+| `memory-handoff-write` | Structured "where we left off" snapshot — currentTask, completed, nextSteps, openQuestions, fileRefs, decisions, notes. Written before compaction or session end so a fresh session can resume without re-explanation. |
+| `memory-handoff-read` | Load the latest handoff (or one by stamp; `list=true` for recent stamps). Call at session start to pick up where the prior session left off. |
+| `memory-context-pressure` | Self-assess context window pressure (`ok`/`warm`/`hot`/`critical`) and receive a deterministic action plan — when to save memories, when to write a handoff, when to invoke `/compact`. Pass `phaseBoundary=true` at natural task/phase boundaries to force a proactive compact regardless of level (pivots thrash the cache anyway — compacting at the boundary is a free lunch). |
 
 ### Governance
 
 | Tool | What it does |
 |------|-------------|
-| `engram-govern` | Run governance checks: contradiction detection (vector + heuristic + LLM), semantic drift monitoring, and memory poisoning detection. All advisory — flags issues without auto-deleting. |
+| `memory-govern` | Run governance checks: contradiction detection (vector + heuristic + LLM), semantic drift monitoring, and memory poisoning detection. All advisory — flags issues without auto-deleting. |
 
 ### Import
 
 | Tool | What it does |
 |------|-------------|
-| `engram-import` | Bulk import from Claude Code JSONL, ChatGPT JSON, or plain text |
+| `memory-import` | Bulk import from Claude Code JSONL, ChatGPT JSON, or plain text |
 
 ## Slash Commands
 

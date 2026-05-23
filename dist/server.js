@@ -1106,6 +1106,45 @@ server.registerTool('memory-import', {
     const result = await importConversation(config, storage, format, content);
     return json(result);
 });
+// ─────────────────────────────────────────────────────────────────────
+// ENGRAM-* BACKWARD COMPATIBILITY ALIASES
+// ─────────────────────────────────────────────────────────────────────
+// Tool names were renamed from engram-* → memory-* in v1.0.0-beta.7.
+// These aliases keep existing installations working. The canonical names
+// are memory-*; the engram-* aliases will be removed in v2.
+//
+// Implementation: after all canonical registrations are done, copy each
+// registered-tool entry into the SDK's internal registry under the old
+// name. Shares the same handler and schema — no logic duplication.
+{
+    const rt = server._registeredTools;
+    const aliases = [
+        ['memory-search', 'engram-search'],
+        ['memory-ingest', 'engram-ingest'],
+        ['memory-scratch-promote', 'engram-scratch-promote'],
+        ['memory-extract', 'engram-extract'],
+        ['memory-maintain', 'engram-maintain'],
+        ['memory-rules', 'engram-rules'],
+        ['memory-outcome', 'engram-outcome'],
+        ['memory-session', 'engram-session'],
+        ['memory-stats', 'engram-stats'],
+        ['memory-govern', 'engram-govern'],
+        ['memory-kg-add', 'engram-kg-add'],
+        ['memory-kg-query', 'engram-kg-query'],
+        ['memory-kg-invalidate', 'engram-kg-invalidate'],
+        ['memory-kg-timeline', 'engram-kg-timeline'],
+        ['memory-diary-write', 'engram-diary-write'],
+        ['memory-diary-read', 'engram-diary-read'],
+        ['memory-handoff-write', 'engram-handoff-write'],
+        ['memory-handoff-read', 'engram-handoff-read'],
+        ['memory-context-pressure', 'engram-context-pressure'],
+        ['memory-import', 'engram-import'],
+    ];
+    for (const [canonical, alias] of aliases) {
+        if (rt[canonical])
+            rt[alias] = rt[canonical];
+    }
+}
 // ── Start Server ────────────────────────────────────────────────────
 async function main() {
     const transport = new StdioServerTransport();

@@ -259,6 +259,78 @@ wrong. Both conditions matter.
 
 ---
 
+## Resolved (2026-05-22) — R-001: engram → przm naming drift
+
+**Was:** `src/server.ts` registered tools as `memory-*` but README,
+all seven skill files, both hooks, `src/context-pressure.ts`
+action-plan strings, and `SKILL.md` still referenced `engram-*`.
+Fresh agents reading docs called tools that didn't exist.
+
+**Resolved by:** Alias table in `src/server.ts:1333+` registers
+every tool under both `memory-*` (canonical) and `engram-*`
+(deprecation runway). README §Tools, all seven `skills/*/SKILL.md`,
+both hooks, `src/context-pressure.ts:28-58`, and top-level
+`SKILL.md` updated to canonical names. Existing installations
+continue to work via the alias path.
+
+---
+
+## Resolved (2026-05-22) — R-002: KG confidence dropped in Postgres
+
+**Was:** `src/storage-postgres.ts:660` (`pgRowToTriple`) hardcoded
+`confidence: 0.5` because the column didn't exist in the schema.
+KG reinforcement and spreading-activation weighting were no-ops
+for all Postgres/cloud users.
+
+**Resolved by:** `migrations/postgres/003_kg_confidence.sql` adds
+the `confidence REAL NOT NULL DEFAULT 0.5` column. `saveTriple`
+writes it; `pgRowToTriple` reads it. `tests/kg-confidence.test.ts`
+exercises read-back-after-write and reinforcement.
+
+---
+
+## Resolved (2026-05-22) — R-003: Episodic L1 duplicates on repeat consolidation
+
+**Was:** `src/episodic-consolidator.ts:103` set
+`consolidationLevel: 0` on source chunks after summarizing them.
+Every `memory-maintain` re-selected the same chunks as candidates
+and produced another L1 summary for the same cluster.
+
+**Resolved by:** One-line change to `consolidationLevel: 1`.
+`tests/episodic-consolidation-level.test.ts` asserts L1 count is
+stable across repeat consolidation passes.
+
+---
+
+## Resolved (2026-05-22) — R-004: TOCTOU race on KG triple uniqueness in Postgres
+
+**Was:** `addTriple` did `queryTriples({activeOnly: true})` then
+conditional insert. Two concurrent ingests of the same content
+both passed the check and inserted duplicate active triples.
+
+**Resolved by:** `migrations/postgres/003_kg_confidence.sql`
+adds `CREATE UNIQUE INDEX knowledge_triples_active_spo_idx ON
+knowledge_triples (tenant_id, subject, predicate, object) WHERE
+invalidated_at IS NULL`. INSERT uses `ON CONFLICT DO NOTHING`;
+confidence reinforcement runs as a separate UPDATE.
+
+---
+
+## Resolved (2026-05-22) — R-005: No SSL enforcement on Postgres connections
+
+**Was:** `src/storage-postgres.ts:85-88` initialized the Pool
+without an `ssl` option. Cloud Postgres (Supabase, Neon, Heroku,
+RDS) typically requires `sslmode=require`; users without it in
+their `DATABASE_URL` got plaintext connections or confusing
+errors.
+
+**Resolved by:** `resolvePostgresSsl()` helper defaults to
+`{ rejectUnauthorized: true }` unless the connection string is
+localhost / 127.0.0.1 or `ENGRAM_PG_SSL=off` is set. Configuration
+documented in README.
+
+---
+
 ## How to add an entry
 
 Pick the next `DEBT-NNN` number. Stick to this skeleton:

@@ -27,13 +27,13 @@ Quick memory operations.
 ## Behavior
 
 ### save
-Call `engram-check-duplicate` first to avoid storing duplicates. If no duplicate, call `engram-ingest` with the content. Let the user know it's saved.
+Call `memory-ingest` with the content (duplicate detection runs inline). Let the user know it's saved.
 
 ### diary
-Call `engram-diary-read` with the date (or today). Present entries chronologically.
+Call `memory-diary-read` with the date (or today). Present entries chronologically.
 
 ### diary write
-Call `engram-diary-write` with the entry content.
+Call `memory-diary-write` with the entry content.
 
 ### import
 Ask the user for the file path and format:
@@ -41,10 +41,10 @@ Ask the user for the file path and format:
 - ChatGPT JSON (exported from OpenAI)
 - Plain text (one memory per line or paragraph)
 
-Call `engram-import` with the file path and format.
+Call `memory-import` with the file path and format.
 
 ### rules
-Call `engram-rules`. Show active procedural rules with their confidence scores and domains. Flag any low-confidence rules that might need reinforcement or removal.
+Call `memory-rules`. Show active procedural rules with their confidence scores and domains. Flag any low-confidence rules that might need reinforcement or removal.
 
 ### session
-Call `engram-session` with show or clear. The session scratchpad is hot RAM for the current working context. Show it formatted, or clear it at end of session.
+Call `memory-session` with show or clear. The session scratchpad is hot RAM for the current working context. Show it formatted, or clear it at end of session.

@@ -60,11 +60,14 @@ export async function consolidateEpisodic(config, storage) {
         catch { /* best-effort */ }
         await storage.saveChunk(summaryChunk);
         stats.summarized++;
-        // Reduce importance of source L0 chunks (they're backed up now)
+        // Reduce importance of source chunks and mark them as consolidated
+        // so they are excluded from future consolidation passes.
+        // R-003: was incorrectly 0, which left chunks eligible for
+        // re-selection and caused duplicate L1 summaries on every run.
         for (const source of cluster) {
             await storage.updateChunk(source.id, {
                 importance: Math.max(0.05, source.importance * 0.7),
-                consolidationLevel: 0, // Still L0, just deprioritized
+                consolidationLevel: 1,
             });
         }
     }

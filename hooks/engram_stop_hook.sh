@@ -7,7 +7,7 @@
 #    /compact can run. Cheap: single transcript read, no LLM.
 #  - Never blocks. The old every-10-messages block was a nag that could
 #    interrupt flow; Claude's MCP instructions already push proactive
-#    engram-ingest / engram-kg-add / persona_signal calls.
+#    memory-ingest / memory-kg-add / persona_signal calls.
 #
 # The checkpoint file lives alongside real handoffs but uses reason=
 # "context-pressure" so it won't confuse the PreCompact freshness check
@@ -91,7 +91,7 @@ node -e "
         'Rolling session checkpoint from engram_stop_hook.sh. Mechanical ' +
         'extraction — overwritten on every assistant turn. If /compact ' +
         'never ran, this is the freshest lifeline. Tool-distilled handoffs ' +
-        '(via engram-handoff-write) live alongside this file as timestamped entries.' +
+        '(via memory-handoff-write) live alongside this file as timestamped entries.' +
         (lastAssistantText ? '\n\nLast assistant note: ' +
           lastAssistantText.trim().split('\n').slice(-3).join(' ').slice(0, 300) : ''),
     };
