@@ -362,6 +362,37 @@ to use these knobs there.
 
 ---
 
+## Resolved (2026-05-23) — Backlog sweep #1
+
+Three small backlog items shipped together as a sweep pass; each
+is independently atomic and self-contained.
+
+- **`memory-extract.messages` now an array.** `src/server.ts:465`
+  previously took `z.string()` (a JSON-encoded array) with the
+  handler calling `JSON.parse`. Same CSV-in-string anti-pattern as
+  R-007. Now `z.array(z.object({role, content})).min(1)`; the byte
+  cap became a turn count cap (10k) so the schema is honest about
+  what it accepts.
+
+- **Episodic clustering determinism.**
+  `src/episodic-consolidator.ts:130` (`clusterMemories`) iterated
+  in whatever order `listChunks()` returned. LanceDB scan order
+  varies with fragment state, so consecutive `memory-maintain`
+  runs against the same corpus could produce different L1
+  summaries. Now sorted by `(createdAt, id)` before the greedy
+  pass, so clustering is reproducible.
+
+- **`memory-ingest` dup-detection response now actionable.**
+  `src/server.ts:301` previously returned
+  `{ingested: 0, duplicate: true, similar: [...]}` and left the
+  caller guessing between accept-existing / retry-skipDedupe /
+  give-up. Response now includes `recommendation` (`accept_existing`
+  / `reinforce_existing` / `force_write_if_intentional_refinement`,
+  thresholded on the top similar score) and a `nextAction` string
+  telling the caller exactly which tool call to make next.
+
+---
+
 ## How to add an entry
 
 Pick the next `DEBT-NNN` number. Stick to this skeleton:

@@ -89,14 +89,26 @@ export async function consolidateEpisodic(config, storage) {
 }
 // ── Clustering ─────────────────────────────────────────────────────
 function clusterMemories(chunks) {
+    // Sort by createdAt (then id, deterministic tiebreak) so consecutive
+    // memory-maintain runs against the same corpus produce the same
+    // clusters. Without this, listChunks() scan order can vary between
+    // LanceDB fragment states and the L1 summaries become non-
+    // reproducible.
+    const sorted = [...chunks].sort((a, b) => {
+        const ta = Date.parse(a.createdAt ?? '');
+        const tb = Date.parse(b.createdAt ?? '');
+        if (ta !== tb)
+            return ta - tb;
+        return a.id.localeCompare(b.id);
+    });
     const clusters = [];
     const assigned = new Set();
-    for (const chunk of chunks) {
+    for (const chunk of sorted) {
         if (assigned.has(chunk.id))
             continue;
         const cluster = [chunk];
         assigned.add(chunk.id);
-        for (const other of chunks) {
+        for (const other of sorted) {
             if (assigned.has(other.id))
                 continue;
             if (shouldCluster(chunk, other, cluster)) {

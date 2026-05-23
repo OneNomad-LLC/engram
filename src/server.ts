@@ -303,9 +303,27 @@ server.registerTool(
       const dupeResults = await search(config, storage, content, 5);
       const similar = dupeResults.filter(r => r.score >= 0.75);
       if (similar.length > 0) {
+        const top = similar[0];
+        // Backlog (memory-ingest dup actionable response): give the caller
+        // a clear forward path so they don't have to guess between
+        // accept-existing / retry-skipDedupe / give-up.
+        const recommendation =
+          top.score >= 0.9
+            ? 'accept_existing'
+            : top.score >= 0.8
+              ? 'reinforce_existing'
+              : 'force_write_if_intentional_refinement';
+        const nextAction =
+          recommendation === 'accept_existing'
+            ? `Treat as recorded — the existing memory (id=${top.chunk.id}) is essentially the same content.`
+            : recommendation === 'reinforce_existing'
+              ? `Call memory-outcome with outcome="helpful" on chunkIds=[${top.chunk.id}] to boost its importance instead of writing a duplicate.`
+              : `Retry with skipDedupe=true if this content is an intentional refinement of the existing memory.`;
         return json({
           ingested: 0,
           duplicate: true,
+          recommendation,
+          nextAction,
           similar: similar.map(r => ({
             id: r.chunk.id,
             content: r.chunk.content,
@@ -462,36 +480,25 @@ server.registerTool(
     title: 'Extract Memories',
     description: 'Extract memories from a conversation. Uses LLM or heuristic fallback. Set rulesOnly=true to extract procedural rules only.',
     inputSchema: z.object({
-      messages: z.string().describe('JSON string of message array: [{role: "user", content: "..."}, ...]'),
+      messages: z.array(z.object({
+        role: z.string().describe('"user" or "assistant".'),
+        content: z.string().describe('Message text.'),
+      })).min(1).describe('Conversation messages, oldest → newest.'),
       conversationId: z.string().optional().describe('Session/conversation identifier.'),
       rulesOnly: z.boolean().optional().describe('If true, only extract procedural rules.'),
     }),
   },
   async ({ messages, conversationId, rulesOnly }) => {
     const storage = await ensureStorage();
-    // Bound input size BEFORE parse to prevent pathological-input DoS.
-    // 1 MB is far above any sane MCP message-array payload.
-    if (messages.length > 1_000_000) {
+    // Bound message count to prevent pathological-input DoS. ~10k
+    // turns is far above any sane MCP message-array payload.
+    if (messages.length > 10_000) {
       return json({
         error: 'messages_too_large',
-        detail: `messages must be < 1MB (got ${messages.length} chars)`,
+        detail: `messages must contain < 10k turns (got ${messages.length})`,
       });
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(messages);
-    } catch (err) {
-      return json({
-        error: 'invalid_messages_json',
-        detail: err instanceof Error ? err.message : String(err),
-      });
-    }
-    if (!Array.isArray(parsed)) {
-      return json({
-        error: 'invalid_messages_format',
-        detail: 'messages must be a JSON array of {role, content} objects',
-      });
-    }
+    const parsed = messages;
     const convId = conversationId ?? `mcp-${Date.now()}`;
 
     // Rules-only mode (replaces old memory-extract-rules tool)
