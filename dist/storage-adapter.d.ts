@@ -83,6 +83,28 @@ export interface StorageAdapter {
     deleteChunk(id: string): Promise<void>;
     listChunks(opts?: ListChunksOpts): Promise<StoredChunk[]>;
     updateChunk(id: string, updates: Partial<StoredChunk>): Promise<void>;
+    /**
+     * Batched upsert of full chunk rows (one mergeInsert on `id`). Optional:
+     * Storage.flushBatch() falls back to per-row updateChunk when an adapter
+     * doesn't implement it. This is the write-side twin of saveChunks — it
+     * exists because per-row LanceDB updates each scan + rewrite a fragment,
+     * so consolidation over a few thousand chunks (decay/link touch nearly
+     * every row) turned into thousands of serialized slow writes.
+     */
+    updateChunks?(chunks: StoredChunk[]): Promise<void>;
+    /** Batched delete by id. Optional — falls back to per-row deleteChunk. */
+    deleteChunks?(ids: string[]): Promise<void>;
+    /**
+     * Compact + prune the chunk table. LanceDB point-updates and mergeInsert
+     * leave delta fragments AND old versions on disk; without pruning, the
+     * store bloats (a 260MB store hit 3.9GB after two per-row reembed passes)
+     * and every later write scans a longer manifest. With no args, does a
+     * safe compaction keeping 7 days of versions. Pass olderThanMs to also
+     * prune versions older than that many ms (0 = keep only current);
+     * deleteUnverified must be true to remove files younger than 7 days, and
+     * is only safe when no other process is writing the store. Optional.
+     */
+    optimizeChunks?(olderThanMs?: number, deleteUnverified?: boolean): Promise<void>;
     chunkCount(): Promise<number>;
     vectorSearch(queryEmbedding: number[], limit: number, filter?: string): Promise<VectorHit[]>;
     getTaxonomy(): Promise<Record<string, Record<string, number>>>;

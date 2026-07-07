@@ -265,6 +265,55 @@ export class FileStorageAdapter {
             return;
         await this.chunks.update({ where: `id = '${esc(id)}'`, values });
     }
+    /**
+     * Batched upsert. mergeInsert on `id` applies every row change in a
+     * single operation instead of one scan-and-rewrite per row. Rows are
+     * serialized through the same chunkToRow path as saveChunks, so this
+     * carries no serialization risk the insert path doesn't already carry.
+     */
+    async updateChunks(chunks) {
+        if (chunks.length === 0)
+            return;
+        await this.chunks
+            .mergeInsert('id')
+            .whenMatchedUpdateAll()
+            .whenNotMatchedInsertAll()
+            .execute(chunks.map(chunkToRow));
+    }
+    /** Batched delete. One predicate per 500 ids so the IN list stays sane. */
+    async deleteChunks(ids) {
+        if (ids.length === 0)
+            return;
+        const BATCH = 500;
+        for (let i = 0; i < ids.length; i += BATCH) {
+            const inList = ids.slice(i, i + BATCH).map(id => `'${esc(id)}'`).join(', ');
+            await this.chunks.delete(`id IN (${inList})`);
+        }
+    }
+    /**
+     * Compact + prune. Without args, a safe compaction that keeps 7 days of
+     * versions. With olderThanMs, also prunes versions older than that many
+     * ms (0 = keep only the current version). deleteUnverified lets it remove
+     * files younger than 7 days — only pass true when no other process is
+     * writing the store (CLI reembed/compact), never from the running server
+     * with an aggressive window.
+     */
+    async optimizeChunks(olderThanMs, deleteUnverified) {
+        try {
+            if (olderThanMs === undefined) {
+                await this.chunks.optimize();
+            }
+            else {
+                await this.chunks.optimize({
+                    cleanupOlderThan: new Date(Date.now() - olderThanMs),
+                    deleteUnverified: deleteUnverified ?? false,
+                });
+            }
+        }
+        catch (err) {
+            console.error('przm-memory: chunk table optimize failed (non-fatal):', err);
+        }
+    }
     async chunkCount() {
         return await this.chunks.countRows();
     }

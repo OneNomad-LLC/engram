@@ -26,6 +26,8 @@ Usage:
   przm-memory-mcp query   [opts]                               filter listing
   przm-memory-mcp reembed [--dry-run]                          re-embed all memories
                                                                with the active model
+  przm-memory-mcp compact                                      prune old table versions,
+                                                               reclaim disk
   przm-memory-mcp login   <server-url> | --server <url>        pair with przm Cloud
   przm-memory-mcp logout                                       remove cached credentials
   przm-memory-mcp help                                         this message
@@ -295,6 +297,21 @@ async function runReembed(argv) {
     }
     process.stderr.write(`przm-memory-mcp: done in ${seconds}s — corpus now in ${current} space\n`);
 }
+async function runCompact(argv) {
+    parseArgs({ args: argv, options: {}, allowPositionals: false });
+    const config = loadConfig();
+    const storage = new Storage(config.dataDir);
+    await storage.ensureReady();
+    // Prune every non-current version. Single-process CLI op, so
+    // deleteUnverified is safe. Reclaims the fragment/version bloat that
+    // per-row writes (recall stats, pre-batch reembed) accumulate over time.
+    process.stderr.write('przm-memory-mcp: compacting chunk table (pruning old versions)...\n');
+    const started = Date.now();
+    await storage.optimizeChunks(0, true);
+    const seconds = ((Date.now() - started) / 1000).toFixed(1);
+    process.stdout.write(JSON.stringify({ compacted: true, seconds: Number(seconds) }, null, 2) + '\n');
+    process.stderr.write(`przm-memory-mcp: done in ${seconds}s — run \`du -sh <dataDir>/lance\` to see reclaimed space\n`);
+}
 async function runLoginCmd(argv) {
     // Server URL is required.  Accept three sources, in precedence:
     //   1. Positional arg: przm-memory-mcp login https://...
@@ -341,6 +358,9 @@ async function main() {
             return;
         case 'reembed':
             await runReembed(rest);
+            return;
+        case 'compact':
+            await runCompact(rest);
             return;
         case 'login':
             await runLoginCmd(rest);

@@ -5,6 +5,34 @@ All notable changes to `@onenomad/przm-memory` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-07-07
+
+### Fixed
+
+- **Consolidation is no longer O(hours) on real stores.** `consolidate()`
+  issued a separate LanceDB point-update per chunk, and its decay/link
+  passes touch nearly every row — on a ~1,300-chunk store that was
+  thousands of serialized scan-and-rewrite operations, made far worse by
+  fragment bloat (see below). One full pass took over 1.5 hours. It now
+  buffers every update/delete and commits them as a single `mergeInsert`
+  upsert + bulk delete + compaction: the same store consolidates in ~30s.
+  New `Storage.beginBatch()` / `flushBatch()` and the adapter primitives
+  `updateChunks` / `deleteChunks` / `optimizeChunks` back it.
+- **`reembed` no longer bloats the store 15x.** The re-embed loop wrote
+  one fragment per chunk with no compaction, so two passes grew a 260MB
+  store to ~4GB of dead versions (which is what made consolidation
+  pathological). It now batches the upserts and prunes old versions at
+  the end.
+- **Auto-maintenance now compacts.** Each consolidation flush prunes
+  versions older than an hour, so per-search recall-stat writes and each
+  pass stop silently re-bloating the store.
+
+### Added
+
+- **`przm-memory-mcp compact`** — prune non-current table versions and
+  reclaim disk. Recovers stores already bloated by pre-1.1.1 writes (a
+  live 4.2GB store compacted to 23MB with no data loss).
+
 ## [1.1.0] - 2026-07-07
 
 ### Changed

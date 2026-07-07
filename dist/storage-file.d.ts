@@ -31,6 +31,24 @@ export declare class FileStorageAdapter implements StorageAdapter {
     deleteChunk(id: string): Promise<void>;
     listChunks(opts?: ListChunksOpts): Promise<StoredChunk[]>;
     updateChunk(id: string, updates: Partial<StoredChunk>): Promise<void>;
+    /**
+     * Batched upsert. mergeInsert on `id` applies every row change in a
+     * single operation instead of one scan-and-rewrite per row. Rows are
+     * serialized through the same chunkToRow path as saveChunks, so this
+     * carries no serialization risk the insert path doesn't already carry.
+     */
+    updateChunks(chunks: StoredChunk[]): Promise<void>;
+    /** Batched delete. One predicate per 500 ids so the IN list stays sane. */
+    deleteChunks(ids: string[]): Promise<void>;
+    /**
+     * Compact + prune. Without args, a safe compaction that keeps 7 days of
+     * versions. With olderThanMs, also prunes versions older than that many
+     * ms (0 = keep only the current version). deleteUnverified lets it remove
+     * files younger than 7 days — only pass true when no other process is
+     * writing the store (CLI reembed/compact), never from the running server
+     * with an aggressive window.
+     */
+    optimizeChunks(olderThanMs?: number, deleteUnverified?: boolean): Promise<void>;
     chunkCount(): Promise<number>;
     vectorSearch(queryEmbedding: number[], limit: number, filter?: string): Promise<VectorHit[]>;
     getTaxonomy(): Promise<Record<string, Record<string, number>>>;

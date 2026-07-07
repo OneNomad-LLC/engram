@@ -42,6 +42,10 @@ export type { StoredChunk } from './storage-adapter.js';
 export class Storage {
   private adapter!: StorageAdapter;
   private ready: Promise<void>;
+  // When non-null, updateChunk/deleteChunk buffer into these instead of
+  // writing immediately; flushBatch() commits them as one bulk upsert +
+  // one bulk delete + a compaction. See beginBatch() for why.
+  private batch: { updates: Map<string, Partial<StoredChunk>>; deletes: Set<string> } | null = null;
 
   constructor(dataDir: string) {
     // Resolve eagerly; file mode is sync, postgres mode awaits the
@@ -68,9 +72,102 @@ export class Storage {
   saveChunk(chunk: StoredChunk): Promise<void> { return this.adapter.saveChunk(chunk); }
   saveChunks(chunks: StoredChunk[]): Promise<void> { return this.adapter.saveChunks(chunks); }
   getChunk(id: string): Promise<StoredChunk | null> { return this.adapter.getChunk(id); }
-  deleteChunk(id: string): Promise<void> { return this.adapter.deleteChunk(id); }
+  deleteChunk(id: string): Promise<void> {
+    if (this.batch) {
+      this.batch.updates.delete(id);
+      this.batch.deletes.add(id);
+      return Promise.resolve();
+    }
+    return this.adapter.deleteChunk(id);
+  }
   listChunks(opts?: ListChunksOpts): Promise<StoredChunk[]> { return this.adapter.listChunks(opts); }
-  updateChunk(id: string, updates: Partial<StoredChunk>): Promise<void> { return this.adapter.updateChunk(id, updates); }
+  updateChunk(id: string, updates: Partial<StoredChunk>): Promise<void> {
+    if (this.batch) {
+      // A delete already staged for this id wins — don't resurrect it.
+      if (this.batch.deletes.has(id)) return Promise.resolve();
+      const prev = this.batch.updates.get(id);
+      this.batch.updates.set(id, prev ? { ...prev, ...updates } : { ...updates });
+      return Promise.resolve();
+    }
+    return this.adapter.updateChunk(id, updates);
+  }
+
+  /**
+   * Enter batched-write mode. While open, updateChunk/deleteChunk buffer
+   * in memory. Consolidation opens a batch around all its passes because
+   * decay/link/merge touch nearly every chunk, and per-row LanceDB writes
+   * scan + rewrite a fragment each — thousands of them serialized is the
+   * difference between a few seconds and over an hour on a real store.
+   * saveChunk/saveChunks are NOT buffered (inserts are already batched and
+   * some passes read them back mid-run).
+   */
+  beginBatch(): void {
+    this.batch = { updates: new Map(), deletes: new Set() };
+  }
+
+  /** Batched upsert of full rows. Falls back to per-row updateChunk for
+   *  adapters without the primitive. Not affected by batch mode — this is
+   *  the direct bulk path used by reembed. */
+  async updateChunks(chunks: StoredChunk[]): Promise<void> {
+    if (chunks.length === 0) return;
+    if (this.adapter.updateChunks) return this.adapter.updateChunks(chunks);
+    for (const c of chunks) await this.adapter.updateChunk(c.id, c);
+  }
+
+  /** Compact + prune the chunk table. See StorageAdapter.optimizeChunks. */
+  async optimizeChunks(olderThanMs?: number, deleteUnverified?: boolean): Promise<void> {
+    if (this.adapter.optimizeChunks) return this.adapter.optimizeChunks(olderThanMs, deleteUnverified);
+  }
+
+  /**
+   * Commit and close the batch: one bulk upsert (mergeInsert), one bulk
+   * delete, then a table compaction. Reads the current chunks once, applies
+   * the buffered partials through the same rowToChunk/chunkToRow path a
+   * normal save uses, and upserts. Falls back to per-row writes for
+   * adapters that don't implement the batch primitives (postgres/cloud).
+   */
+  async flushBatch(): Promise<{ updated: number; deleted: number }> {
+    const batch = this.batch;
+    this.batch = null; // writes below must go straight through
+    if (!batch) return { updated: 0, deleted: 0 };
+    const { updates, deletes } = batch;
+
+    if (deletes.size > 0) {
+      if (this.adapter.deleteChunks) await this.adapter.deleteChunks([...deletes]);
+      else for (const id of deletes) await this.adapter.deleteChunk(id);
+    }
+
+    let upserted = 0;
+    if (updates.size > 0) {
+      if (this.adapter.updateChunks) {
+        const byId = new Map((await this.adapter.listChunks()).map(c => [c.id, c]));
+        const merged: StoredChunk[] = [];
+        for (const [id, changes] of updates) {
+          if (deletes.has(id)) continue;
+          const chunk = byId.get(id);
+          if (!chunk) continue; // updated-then-deleted, or gone
+          Object.assign(chunk, changes);
+          merged.push(chunk);
+        }
+        if (merged.length > 0) await this.adapter.updateChunks(merged);
+        upserted = merged.length;
+      } else {
+        for (const [id, changes] of updates) {
+          if (deletes.has(id)) continue;
+          await this.adapter.updateChunk(id, changes);
+          upserted++;
+        }
+      }
+    }
+
+    // Reclaim: prune versions older than an hour (well outside any in-flight
+    // read/write) so per-search recall-stat writes and each consolidation
+    // pass don't silently re-bloat the store. deleteUnverified is safe here
+    // because nothing this store touches holds a transaction open for an hour.
+    if (this.adapter.optimizeChunks) await this.adapter.optimizeChunks(3_600_000, true);
+    return { updated: upserted, deleted: deletes.size };
+  }
+
   chunkCount(): Promise<number> { return this.adapter.chunkCount(); }
   vectorSearch(queryEmbedding: number[], limit: number, filter?: string): Promise<VectorHit[]> {
     return this.adapter.vectorSearch(queryEmbedding, limit, filter);

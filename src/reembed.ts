@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SmartMemoryConfig } from './types.js';
 import { Storage } from './storage.js';
+import type { StoredChunk } from './storage.js';
 import { embed, getEmbeddingModelName, getEmbeddingModelProfile, LEGACY_EMBEDDING_MODEL } from './llm.js';
 import { buildContextPrefix } from './utils.js';
 
@@ -108,7 +109,20 @@ export async function reembedAll(
   const targets = chunks.filter(c => c.consolidationLevel !== -1);
   const stats: ReembedStats = { total: targets.length, reembedded: 0, skipped: 0, failed: 0 };
 
+  // Buffer re-embedded chunks and flush in bulk. The original per-row
+  // updateChunk loop is exactly what bloated a live store from 260MB to
+  // 3.9GB — each update wrote a new fragment with no compaction, and two
+  // full passes left thousands of dead versions behind.
+  const FLUSH_EVERY = 500;
+  let pending: StoredChunk[] = [];
   let done = 0;
+
+  const flush = async () => {
+    if (pending.length === 0) return;
+    await storage.updateChunks(pending);
+    pending = [];
+  };
+
   for (const chunk of targets) {
     done++;
     try {
@@ -120,8 +134,11 @@ export async function reembedAll(
         stats.failed++;
         continue;
       }
-      await storage.updateChunk(chunk.id, { embedding, embeddingVersion: profile.version });
+      chunk.embedding = embedding;
+      chunk.embeddingVersion = profile.version;
+      pending.push(chunk);
       stats.reembedded++;
+      if (pending.length >= FLUSH_EVERY) await flush();
     } catch {
       stats.failed++;
     }
@@ -129,6 +146,12 @@ export async function reembedAll(
       onProgress(done, targets.length);
     }
   }
+  await flush();
+
+  // Reclaim: prune every old version (0 = keep only current). reembed is a
+  // single-process CLI op with no concurrent writer, so deleteUnverified is
+  // safe and turns the post-reembed store back to its compact size.
+  await storage.optimizeChunks(0, true);
 
   // Only stamp the marker when the corpus actually made it into the new
   // space. A partial run keeps the old marker so the boot warning stays.

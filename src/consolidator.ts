@@ -36,35 +36,48 @@ export async function consolidate(storage: Storage, config?: SmartMemoryConfig):
 
   let chunks = await storage.listChunks();
 
-  // Scratch tier: session-only memories. Purge expired ones first, then
-  // exclude live scratch from all other consolidation paths so they never
-  // get linked, decayed, merged, or promoted.
-  stats.scratchPurged = await purgeExpiredScratch(storage, chunks);
-  chunks = chunks.filter(c => c.tier !== 'scratch');
+  // Buffer every updateChunk/deleteChunk the passes below issue into one
+  // batch, committed once at the end. Each pass still reads from the
+  // in-memory `chunks` snapshot (not storage), so buffering the writes
+  // doesn't change what any pass sees — only how the writes hit disk.
+  // Without this, decay + link + merge fire thousands of per-row LanceDB
+  // updates and a full pass over a few-thousand-chunk store takes >1h.
+  storage.beginBatch();
+  try {
+    // Scratch tier: session-only memories. Purge expired ones first, then
+    // exclude live scratch from all other consolidation paths so they never
+    // get linked, decayed, merged, or promoted.
+    stats.scratchPurged = await purgeExpiredScratch(storage, chunks);
+    chunks = chunks.filter(c => c.tier !== 'scratch');
 
-  // Biased replay: prioritize chunks by importance * recency * surprise
-  if (cfg.enableBiasedReplay) {
-    chunks = sortByReplayPriority(chunks);
-  }
+    // Biased replay: prioritize chunks by importance * recency * surprise
+    if (cfg.enableBiasedReplay) {
+      chunks = sortByReplayPriority(chunks);
+    }
 
-  stats.dailyMoved = await processDailyTier(storage, chunks);
-  stats.promoted = await promoteChunks(storage, chunks);
-  stats.demoted = await demoteToArchive(storage, chunks);
-  stats.reactivated = await reactivateArchived(storage, chunks);
-  stats.linked = await linkRelated(storage, chunks);
-  stats.decayed = cfg.enableFSRS
-    ? await decayFSRS(storage, chunks) + await decayIrrelevant(storage, chunks)
-    : await decayImportance(storage, chunks) + await decayIrrelevant(storage, chunks);
-  stats.merged = await mergeNearDuplicates(storage, chunks);
+    stats.dailyMoved = await processDailyTier(storage, chunks);
+    stats.promoted = await promoteChunks(storage, chunks);
+    stats.demoted = await demoteToArchive(storage, chunks);
+    stats.reactivated = await reactivateArchived(storage, chunks);
+    stats.linked = await linkRelated(storage, chunks);
+    stats.decayed = cfg.enableFSRS
+      ? await decayFSRS(storage, chunks) + await decayIrrelevant(storage, chunks)
+      : await decayImportance(storage, chunks) + await decayIrrelevant(storage, chunks);
+    stats.merged = await mergeNearDuplicates(storage, chunks);
 
-  // Self-organizing memories: auto-describe undescribed memories and generate cross-links
-  stats.selfOrganized = await selfOrganize(storage, chunks);
+    // Self-organizing memories: auto-describe undescribed memories and generate cross-links
+    stats.selfOrganized = await selfOrganize(storage, chunks);
 
-  // Episodic-to-semantic consolidation (Improvement 8)
-  if (cfg.enableEpisodicConsolidation) {
-    const episodic = await consolidateEpisodic(cfg, storage);
-    stats.episodicClustered = episodic.clustered;
-    stats.episodicSummarized = episodic.summarized;
+    // Episodic-to-semantic consolidation (Improvement 8). Its new summary
+    // chunks are inserted directly (saveChunks isn't buffered); its updates
+    // to source chunks ride the same batch.
+    if (cfg.enableEpisodicConsolidation) {
+      const episodic = await consolidateEpisodic(cfg, storage);
+      stats.episodicClustered = episodic.clustered;
+      stats.episodicSummarized = episodic.summarized;
+    }
+  } finally {
+    await storage.flushBatch();
   }
 
   return stats;
