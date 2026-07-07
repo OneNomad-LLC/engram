@@ -416,7 +416,7 @@ export async function search(config, storage, query, maxResults, filters) {
     // ── Apply token budget ────────────────────────────────────────────
     const results = [];
     let tokensUsed = 0;
-    const toUpdate = [];
+    const toBump = [];
     for (const entry of sorted) {
         const tokens = estimateTokens(entry.chunk.content) + 10;
         if (tokensUsed + tokens > config.maxRecallTokens)
@@ -430,23 +430,23 @@ export async function search(config, storage, query, maxResults, filters) {
             ...(vectorSimilarity !== undefined ? { vectorSimilarity } : {}),
         });
         tokensUsed += tokens;
-        toUpdate.push({ id: entry.chunk.id, recallCount: entry.chunk.recallCount + 1 });
+        toBump.push(entry.chunk);
     }
-    // Fire-and-forget recall stat updates: Lance serializes writes, so awaiting
-    // N updates inside the hot path turns a 100-result search into a 60s
-    // timeout. Run them in the background so the caller isn't blocked.
-    if (toUpdate.length > 0) {
+    // Recall-stat bump. One batched upsert instead of N per-row updates:
+    // every per-row LanceDB update writes a fresh fragment, so a busy day of
+    // searches (each bumping ~10 chunks) left thousands of fragment versions
+    // to be reclaimed only at the daily maintenance — the store drifted into
+    // the hundreds of MB between runs. mergeInsert collapses one search's
+    // bumps into a single version. The bumped copies are shallow clones so
+    // the chunk objects handed back to the caller aren't mutated, and they
+    // carry the full row (embedding included) so the upsert is lossless.
+    // Fire-and-forget: recall stats must never block or fail the query.
+    if (toBump.length > 0) {
         const ts = new Date().toISOString();
-        (async () => {
-            for (const { id, recallCount } of toUpdate) {
-                try {
-                    await storage.updateChunk(id, { recallCount, lastRecalledAt: ts });
-                }
-                catch {
-                    // Recall stats are best-effort; swallow to avoid unhandled rejections
-                }
-            }
-        })();
+        const bumped = toBump.map(c => ({ ...c, recallCount: c.recallCount + 1, lastRecalledAt: ts }));
+        void storage.updateChunks(bumped).catch(() => {
+            // Best-effort; swallow to avoid unhandled rejections.
+        });
     }
     // Finalize the diagnostic trace: stamp final result count + IDs +
     // duration, then persist asynchronously so trace IO never blocks the

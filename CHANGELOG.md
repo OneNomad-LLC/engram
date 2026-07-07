@@ -5,6 +5,20 @@ All notable changes to `@onenomad/przm-memory` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-07-07
+
+### Fixed
+
+- **Search recall-stat writes are batched.** Every search bumps
+  `recallCount` + `lastRecalledAt` on each returned chunk; that was one
+  per-row LanceDB update apiece, and each writes a fresh fragment. A busy
+  day of searches left thousands of fragment versions that only got
+  reclaimed at the daily maintenance, so the store drifted into the
+  hundreds of MB between runs. The bump is now a single `mergeInsert` per
+  search (full-row upsert, embedding preserved), collapsing a search's
+  writes into one version. Covered by `tests/recall-bump-batch.test.ts`,
+  which pins that the upsert never clobbers the stored embedding.
+
 ## [1.1.1] - 2026-07-07
 
 ### Fixed
