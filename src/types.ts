@@ -114,7 +114,13 @@ export interface DailyLogEntry {
 
 export interface SearchResult {
   chunk: MemoryChunk;
+  /** Composite ranking score. Under RRF (the default) this is a rank-fusion
+   *  value in the ~0.003-0.07 band — it orders results but is NOT a 0..1
+   *  relevance. Use vectorSimilarity for absolute thresholds. */
   score: number;
+  /** Raw vector-stage cosine similarity (0..1), present when the chunk
+   *  passed the vector stage. Absent for keyword-only / graph-walk hits. */
+  vectorSimilarity?: number;
 }
 
 // ── Config ───────────────────────────────────────────────────────────

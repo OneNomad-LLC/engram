@@ -107,7 +107,7 @@ This is where the interesting stuff happens. A query goes through nine stages be
 
 **Stage 1: Signal Extraction.** Before any search happens, the query gets parsed for dates, entities (proper nouns), quoted phrases, and temporal language. If someone writes "What was Matt working on before he switched jobs in June?" the system extracts the date (June), the entity (Matt), and flags it as a temporal inference query because of the word "before."
 
-**Stage 2: Vector Search.** Standard ANN search against LanceDB using cosine distance on 384-dim embeddings. This handles the "find semantically similar stuff" part. Candidates need at least 0.25 similarity to make the cut.
+**Stage 2: Vector Search.** Standard ANN search against LanceDB using cosine distance on 384-dim embeddings. This handles the "find semantically similar stuff" part. Candidates must clear a similarity floor calibrated per model family (0.55 for the default bge-small, 0.25 for MiniLM-class models) — floors live in the model profile in `src/llm.ts` and the `tests/alien-query-floor.test.ts` calibration suite keeps them honest.
 
 **Stage 3: IDF Keyword Scoring.** Rare terms in the query get weighted higher than common words. If you search for "Matt TypeScript" both terms will dominate scoring because they appear in relatively few memories. Proper nouns get an extra 1.5x boost. Results from this stage get blended with vector scores. The blend shifts toward keywords when entities are present, since names and specific nouns are better matched by exact text than by embedding similarity.
 
@@ -348,7 +348,9 @@ Then point your MCP client at `dist/server.js`:
 | `OPENROUTER_API_KEY` | (none) | Enables LLM extraction and reranking via [OpenRouter](https://openrouter.ai). Pick any model provider you want. Without it, the system uses heuristic extraction and keyword/vector search only. |
 | `MEM0_API_KEY` | (none) | Enables Mem0 cloud extraction as a second opinion |
 | `ENGRAM_DATA_DIR` | `~/.claude/engram` | Where data gets stored |
-| `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | HuggingFace model for embeddings |
+| `PRZM_MEMORY_EMBEDDING_MODEL` | `Xenova/bge-small-en-v1.5` | HuggingFace model for embeddings (legacy `ENGRAM_EMBEDDING_MODEL` also honored). After changing it, run `przm-memory-mcp reembed` — stored vectors stay in the old model's space until re-embedded, and the server warns at boot when they mismatch. |
+| `PRZM_MEMORY_AUTO_MAINTAIN` | `1` | Set `0` to disable the automatic consolidation pass (runs ~20s after boot when the last run is older than the interval). |
+| `PRZM_MEMORY_MAINTAIN_INTERVAL_HOURS` | `24` | Minimum hours between automatic consolidation passes. |
 | `ENGRAM_DEVICE` | `cpu` | Embedding device: `cpu`, `dml` (DirectML), or `cuda` |
 | `ENGRAM_MODEL` | `anthropic/claude-haiku-4.5` | OpenRouter model ID for LLM features. Only used when `OPENROUTER_API_KEY` is set. Any model on [openrouter.ai](https://openrouter.ai) works. |
 | `STORAGE_BACKEND` | `file` | Storage backend: `file` (LanceDB + filesystem, default), `postgres` (self-hosted multi-tenant), or `cloud` (przm Cloud Pro). See below. |
@@ -451,7 +453,7 @@ For shared/cloud deployments where many users share one process, it also speaks 
 **Notes**
 
 - pgvector required (`CREATE EXTENSION vector;`). The migration runs this for you when your DB role has the privileges; otherwise create it manually first.
-- Embedding dimension is 384 by default (matches the local `Xenova/all-MiniLM-L6-v2` model). If you change `ENGRAM_EMBEDDING_MODEL` to one with a different dimensionality, edit `migrations/postgres/001_init.sql` before running migrations.
+- Embedding dimension is 384 by default (matches the local `Xenova/bge-small-en-v1.5` model). If you change `PRZM_MEMORY_EMBEDDING_MODEL` to one with a different dimensionality, edit `migrations/postgres/001_init.sql` before running migrations.
 - Local file mode and postgres mode are **not** wire-compatible — there's no auto-import. If you're migrating an existing local install to the cloud, re-ingest is the path. Diary and handoffs in particular store different on-disk formats (markdown files vs. jsonb rows).
 - Single user, single machine: stay on `file`. The postgres path exists for the hosted przm deployment and similar shared infra.
 
@@ -469,7 +471,7 @@ The MCP server exposes 20 tools across six groups. Several earlier tools (`engra
 | `memory-ingest` | Write-ahead log: immediately persist a memory before responding. Runs duplicate detection inline (replaces `engram-check-duplicate`). Defaults `origin='user'` since explicit ingest is user-asserted; pass `tier: 'scratch'` for session-only notes. |
 | `memory-scratch-promote` | Graduate a scratch-tier memory to short-term so it survives the 24h auto-purge and enters the normal consolidation lifecycle. |
 | `memory-extract` | Extract memories from a conversation (LLM or heuristic). Rules-only mode replaces the old `engram-extract-rules`. |
-| `memory-maintain` | Run consolidation (decay, promote, link, merge, self-organize). Auto-describes unnamed memories, generates cross-links, and syncs the Persona procedural bridge when both servers are running. |
+| `memory-maintain` | Run consolidation (decay, promote, link, merge, self-organize). Auto-describes unnamed memories, generates cross-links, and syncs the Persona procedural bridge when both servers are running. Also runs automatically: the server schedules a pass ~20s after boot whenever the last run is older than `PRZM_MEMORY_MAINTAIN_INTERVAL_HOURS` (default 24h). |
 | `memory-rules` | Show active procedural rules |
 | `memory-outcome` | Record recall feedback (helpful/corrected/irrelevant) |
 | `memory-session` | Manage session state (hot RAM scratchpad) |

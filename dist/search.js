@@ -1,4 +1,4 @@
-import { embed, llmComplete } from './llm.js';
+import { embed, llmComplete, getEmbeddingModelProfile } from './llm.js';
 import { estimateTokens } from './utils.js';
 import { rerank } from './reranker.js';
 import { createTrace, recordStage, endTrace, persistTrace, } from './retrieval-trace.js';
@@ -48,6 +48,11 @@ export async function search(config, storage, query, maxResults, filters) {
         ? new Set(allChunks.map(c => c.id))
         : undefined;
     const scored = new Map();
+    // Raw vector-stage cosine similarity per chunk. RRF replaces `score`
+    // with rank-fusion values (~0.003-0.033) that only order results;
+    // consumers needing an absolute 0..1 scale (ingest dedupe, CLI
+    // --min-relevance) read this instead.
+    const vectorSimById = new Map();
     // Pre-extract query signals for boosting
     const querySignals = extractQuerySignals(query, referenceDate);
     const hasEntities = querySignals.entities.length > 0;
@@ -55,11 +60,14 @@ export async function search(config, storage, query, maxResults, filters) {
     const idfWeights = buildIdfWeights(query, allChunks);
     // ── Native ANN vector search via LanceDB ───────────────────────────
     let queryEmbedding = null;
+    const modelProfile = getEmbeddingModelProfile();
     try {
-        // Build the same contextual prefix used at ingest time so query and
-        // stored embeddings live in the same vector space.
-        const queryPrefix = config.enableContextualPrefix
-            ? 'search query: '
+        // Query-side prefix comes from the model profile. Asymmetric models
+        // (BGE, nomic) were trained with an instruction on the query side and
+        // need it unconditionally; symmetric MiniLM-class models keep the old
+        // behavior where the prefix rides the contextual-prefix flag.
+        const queryPrefix = (modelProfile.alwaysPrefixQuery || config.enableContextualPrefix)
+            ? modelProfile.queryPrefix
             : undefined;
         queryEmbedding = await embed(config, query, queryPrefix);
     }
@@ -96,7 +104,12 @@ export async function search(config, storage, query, maxResults, filters) {
         const isAgg = querySignals.isAggregationQuery;
         const defaultMult = isPref ? 15 : isAgg ? 12 : 5;
         const defaultMax = isPref ? 150 : isAgg ? 120 : 50;
-        const defaultFloor = isPref ? 0.15 : isAgg ? 0.18 : 0.25;
+        // Floors come from the model profile — similarity distributions shift
+        // by model family, so a MiniLM-calibrated 0.25 floor passes pure noise
+        // under BGE and a BGE-calibrated floor blocks everything under MiniLM.
+        const defaultFloor = isPref
+            ? modelProfile.preferenceFloor
+            : isAgg ? modelProfile.aggregationFloor : modelProfile.similarityFloor;
         const candidatePool = Math.min(limit * (envPoolMult ?? defaultMult), envPoolMax ?? defaultMax);
         const similarityFloor = envFloor ?? defaultFloor;
         const vectorResults = await storage.vectorSearch(queryEmbedding, candidatePool, "tier != 'archive' AND consolidation_level != -1");
@@ -108,6 +121,7 @@ export async function search(config, storage, query, maxResults, filters) {
             const similarity = 1 - distance;
             if (similarity > similarityFloor) {
                 scored.set(chunk.id, { chunk, score: similarity });
+                vectorSimById.set(chunk.id, similarity);
                 aboveFloor++;
             }
             else {
@@ -409,7 +423,12 @@ export async function search(config, storage, query, maxResults, filters) {
             break;
         if (results.length >= limit)
             break;
-        results.push({ chunk: entry.chunk, score: entry.score });
+        const vectorSimilarity = vectorSimById.get(entry.chunk.id);
+        results.push({
+            chunk: entry.chunk,
+            score: entry.score,
+            ...(vectorSimilarity !== undefined ? { vectorSimilarity } : {}),
+        });
         tokensUsed += tokens;
         toUpdate.push({ id: entry.chunk.id, recallCount: entry.chunk.recallCount + 1 });
     }

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { SmartMemoryConfig, MemoryType, CognitiveLayer, Sentiment, MemoryOrigin, MemoryTier } from './types.js';
 import type { StoredChunk } from './storage.js';
 import { Storage } from './storage.js';
-import { embed } from './llm.js';
+import { embed, getEmbeddingModelProfile } from './llm.js';
 import { buildContextPrefix } from './utils.js';
 import { chunkContent } from './chunker.js';
 import { extractAndPersistTriples } from './kg-extractor.js';
@@ -270,7 +270,7 @@ export async function ingest(
         try {
           const prefix = buildContextPrefix(subChunk);
           subChunk.embedding = await embed(config, subContent, prefix);
-          subChunk.embeddingVersion = 1;
+          subChunk.embeddingVersion = getEmbeddingModelProfile().version;
         } catch { /* skip */ }
 
         newChunks.push(subChunk);
@@ -296,7 +296,7 @@ export async function ingest(
       try {
         const prefix = buildContextPrefix(chunk);
         chunk.embedding = await embed(config, chunk.content, prefix);
-        chunk.embeddingVersion = 1;
+        chunk.embeddingVersion = getEmbeddingModelProfile().version;
       } catch { /* skip */ }
 
       newChunks.push(chunk);

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { embed, llmComplete, isLlmAvailable } from './llm.js';
+import { embed, llmComplete, isLlmAvailable, getEmbeddingModelProfile } from './llm.js';
 import { cosineSimilarity, buildContextPrefix } from './utils.js';
 /**
  * Run episodic-to-semantic consolidation.
@@ -49,7 +49,7 @@ export async function consolidateEpisodic(config, storage) {
             difficulty: 0.2,
             consolidationLevel: 1,
             sourceChunkIds: cluster.map(c => c.id),
-            embeddingVersion: 1,
+            embeddingVersion: getEmbeddingModelProfile().version,
             origin: 'derived',
         };
         // Embed the summary

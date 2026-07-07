@@ -210,27 +210,23 @@ audit table is the same table both features write to.
 
 ---
 
-## DEBT-008 — Embedding model is effectively hardcoded
+## DEBT-008 — Embedding model is effectively hardcoded — RESOLVED
 
-**Where:** `src/storage.ts` references `Xenova/all-MiniLM-L6-v2` (384-
-dim) as the embedding model.
+**Resolved:** The default model is now `Xenova/bge-small-en-v1.5`
+(same 384 dims). Model-family-specific retrieval knobs (query prefix,
+similarity floors, dedupe thresholds) live in
+`getEmbeddingModelProfile()` in `src/llm.ts`, so a swap is a profile
+entry plus floor calibration via `tests/alien-query-floor.test.ts`.
+The corpus migration story exists: `przm-memory-mcp reembed` rewrites
+every stored vector with the active model, an `embedding-meta.json`
+marker tracks which space the corpus is in, and the server warns at
+boot on mismatch instead of silently degrading.
 
-**Choice:** A single embedding model ships with Engram. Swapping it
-requires re-embedding the entire corpus and changing the dim
-constant.
-
-**Why:** MiniLM-L6-v2 is the right default — small (23MB), runs on
-CPU, scores 92% R@10 on LoCoMo. Multi-model support adds config
-complexity and a corpus migration story.
-
-**What hurts:** Specialized domains (code search, legal text, medical
-text) benefit from domain-specific embeddings, and we can't offer
-that today. Larger-context embeddings (768-dim or 1536-dim) need a
-new collection.
-
-**Revisit when:** A specific customer or domain shows measurable
-benefit from a different model — i.e. don't speculatively
-generalize, wait for the pull.
+**Still true:** the LanceDB vector column width is fixed at table
+creation (384), so a model with a different native dimension needs
+either Matryoshka truncation (`ENGRAM_EMBEDDING_DIM`) or an
+export/re-import into a fresh data dir. `reembed` preflights this and
+refuses with instructions rather than corrupting the column.
 
 ---
 

@@ -24,6 +24,8 @@ Usage:
   przm-memory-mcp                                              run MCP stdio server
   przm-memory-mcp search  --query <q> [opts]                   hybrid search
   przm-memory-mcp query   [opts]                               filter listing
+  przm-memory-mcp reembed [--dry-run]                          re-embed all memories
+                                                               with the active model
   przm-memory-mcp login   <server-url> | --server <url>        pair with przm Cloud
   przm-memory-mcp logout                                       remove cached credentials
   przm-memory-mcp help                                         this message
@@ -34,10 +36,15 @@ search options:
   --topic <t>            filter by topic
   --tag <t>              filter by exact tag
   --limit <n>            max results (default 10)
-  --min-relevance <f>    drop results with score < f (0..1)
+  --min-relevance <f>    drop results with vector similarity < f (0..1)
   --format json|text     output mode (default json)
   --no-embed             skip embedding model load (keyword/IDF only,
                          ~1.5s faster cold-start, lower recall)
+
+reembed options:
+  --dry-run              report what would be re-embedded without writing
+  Run this once after changing the embedding model (the server logs a
+  warning at boot when stored vectors don't match the active model).
 
 query options:
   --project <p>          filter by domain
@@ -55,7 +62,11 @@ login options:
                          (PYRE_API_URL env var also works)
 
 Environment:
-  ENGRAM_DATA_DIR        data directory (default ~/.claude/engram)
+  PRZM_MEMORY_DATA_DIR   data directory (default ~/.claude/przm-memory;
+                         legacy ENGRAM_DATA_DIR also honored)
+  PRZM_MEMORY_EMBEDDING_MODEL
+                         embedding model (default Xenova/bge-small-en-v1.5;
+                         legacy ENGRAM_EMBEDDING_MODEL also honored)
   PYRE_API_URL           przm server server URL (login subcommand; alternative
                          to positional arg / --server flag)
   PYRE_CREDENTIALS_FILE  override ~/.pyre/credentials.json location
@@ -163,7 +174,13 @@ async function runSearch(argv) {
     catch (err) {
         fail(`search failed: ${err.message}`);
     }
-    const filtered = results.filter(r => r.score >= minRelevance).slice(0, limit);
+    // --min-relevance promises a 0..1 scale, which the composite score no
+    // longer is under RRF (rank-fusion values top out near ~0.07). Filter
+    // on the raw vector similarity when available; keyword-only results
+    // (--no-embed) fall back to the composite score.
+    const filtered = results
+        .filter(r => (r.vectorSimilarity ?? r.score) >= minRelevance)
+        .slice(0, limit);
     if (format === 'text') {
         process.stdout.write(formatRecalledMemories(filtered));
         return;
@@ -174,6 +191,9 @@ async function runSearch(argv) {
         results: filtered.map(r => ({
             ...chunkToWire(r.chunk),
             score: Math.round(r.score * 1000) / 1000,
+            ...(r.vectorSimilarity !== undefined
+                ? { similarity: Math.round(r.vectorSimilarity * 1000) / 1000 }
+                : {}),
         })),
     }, null, 2) + '\n');
 }
@@ -221,6 +241,60 @@ async function runQuery(argv) {
         results: filtered.map(chunkToWire),
     }, null, 2) + '\n');
 }
+async function runReembed(argv) {
+    const { values } = parseArgs({
+        args: argv,
+        options: { 'dry-run': { type: 'boolean' } },
+        allowPositionals: false,
+    });
+    const config = loadConfig();
+    const storage = new Storage(config.dataDir);
+    await storage.ensureReady();
+    const { getEmbeddingModelName } = await import('./llm.js');
+    const { readEmbeddingMeta, reembedAll } = await import('./reembed.js');
+    const current = getEmbeddingModelName();
+    const meta = readEmbeddingMeta(config.dataDir);
+    process.stderr.write(`przm-memory-mcp: active model  ${current}\n`);
+    process.stderr.write(`przm-memory-mcp: corpus model  ${meta?.model ?? '(unknown — pre-marker store)'}\n`);
+    const chunks = await storage.listChunks();
+    const targets = chunks.filter(c => c.consolidationLevel !== -1);
+    if (values['dry-run']) {
+        process.stdout.write(JSON.stringify({
+            dryRun: true,
+            activeModel: current,
+            corpusModel: meta?.model ?? null,
+            wouldReembed: targets.length,
+        }, null, 2) + '\n');
+        return;
+    }
+    // Preflight: embed a probe and make sure the produced dimension matches
+    // what's already stored. A mismatched write corrupts the vector column;
+    // fail with instructions instead.
+    const { embed } = await import('./llm.js');
+    const probe = await embed(config, 'dimension probe');
+    if (probe.length === 0) {
+        fail('embedding model failed to load — cannot re-embed');
+    }
+    const sample = targets.find(c => c.embedding && c.embedding.length > 0);
+    if (sample?.embedding && sample.embedding.length !== probe.length) {
+        fail(`dimension mismatch: stored vectors are ${sample.embedding.length}-dim but the active model ` +
+            `produces ${probe.length}-dim. The vector column width is fixed at table creation. ` +
+            `Either set ENGRAM_EMBEDDING_DIM=${sample.embedding.length} (Matryoshka truncation, ` +
+            `valid only for MRL-trained models) or export + re-import into a fresh data dir.`);
+    }
+    process.stderr.write(`przm-memory-mcp: re-embedding ${targets.length} memories...\n`);
+    const started = Date.now();
+    const stats = await reembedAll(config, storage, (done, total) => {
+        process.stderr.write(`przm-memory-mcp: ${done}/${total}\n`);
+    });
+    const seconds = ((Date.now() - started) / 1000).toFixed(1);
+    process.stdout.write(JSON.stringify({ ...stats, model: current, seconds: Number(seconds) }, null, 2) + '\n');
+    if (stats.failed > 0) {
+        process.stderr.write(`przm-memory-mcp: ${stats.failed} chunks failed — marker not updated, boot warning stays. Re-run to retry.\n`);
+        process.exit(1);
+    }
+    process.stderr.write(`przm-memory-mcp: done in ${seconds}s — corpus now in ${current} space\n`);
+}
 async function runLoginCmd(argv) {
     // Server URL is required.  Accept three sources, in precedence:
     //   1. Positional arg: przm-memory-mcp login https://...
@@ -264,6 +338,9 @@ async function main() {
             return;
         case 'query':
             await runQuery(rest);
+            return;
+        case 'reembed':
+            await runReembed(rest);
             return;
         case 'login':
             await runLoginCmd(rest);

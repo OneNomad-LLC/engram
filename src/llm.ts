@@ -10,8 +10,10 @@ import type { SmartMemoryConfig } from './types.js';
  *   Override with ENGRAM_MODEL env var.
  *
  * Embeddings: Local ONNX model via @huggingface/transformers.
- *   Default model: Xenova/all-MiniLM-L6-v2 (384-dim, ~23 MB, cached after first use).
- *   Override with ENGRAM_EMBEDDING_MODEL env var.
+ *   Default model: Xenova/bge-small-en-v1.5 (384-dim, ~34 MB, cached after first use).
+ *   Override with PRZM_MEMORY_EMBEDDING_MODEL env var (legacy: ENGRAM_EMBEDDING_MODEL).
+ *   After changing the model, run `przm-memory-mcp reembed` — stored vectors
+ *   live in the old model's space and mixed-space search silently degrades.
  *
  * GPU acceleration:
  *   Set ENGRAM_DEVICE=dml   for AMD/Intel/NVIDIA DirectML (Windows)
@@ -70,6 +72,92 @@ export async function llmComplete(
 }
 
 // ── Local Embeddings ────────────────────────────────────────────────
+
+export const DEFAULT_EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5';
+/** Default before v1.1 — stores created back then hold vectors in this model's space. */
+export const LEGACY_EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2';
+
+export function getEmbeddingModelName(): string {
+  return process.env.PRZM_MEMORY_EMBEDDING_MODEL
+    ?? process.env.ENGRAM_EMBEDDING_MODEL
+    ?? process.env.SMART_MEMORY_EMBEDDING_MODEL
+    ?? DEFAULT_EMBEDDING_MODEL;
+}
+
+/**
+ * Model-family retrieval profile. Cosine-similarity distributions differ
+ * by model family: MiniLM-class models put unrelated pairs near 0.1-0.3,
+ * BGE v1.5 compresses everything into a higher band (unrelated pairs sit
+ * around 0.5-0.65). Floors and duplicate thresholds must shift with the
+ * model or they either pass everything or block everything.
+ *
+ * BGE v1.5 is also asymmetric: short queries need the instruction prefix
+ * the model was trained with; passages embed bare. MiniLM is symmetric,
+ * where the lightweight 'search query: ' prefix only applies when
+ * contextual prefixes are enabled (the space its floor was calibrated in).
+ */
+export interface EmbeddingModelProfile {
+  /** Instruction prepended to query-side embeds. */
+  queryPrefix: string;
+  /** True when the model requires the query prefix regardless of the contextual-prefix flag. */
+  alwaysPrefixQuery: boolean;
+  /** Vector-stage similarity floor for standard queries. */
+  similarityFloor: number;
+  /** Floor for preference/recommendation queries (embed far from concrete content). */
+  preferenceFloor: number;
+  /** Floor for aggregation queries (answer needs N chunks, not one match). */
+  aggregationFloor: number;
+  /** Ingest dedupe: cosine similarity above which content counts as a near-duplicate. */
+  dupCheck: number;
+  /** Dedupe recommendation ladder: reinforce-existing threshold. */
+  dupReinforce: number;
+  /** Dedupe recommendation ladder: accept-existing threshold. */
+  dupAccept: number;
+  /** Small int stamped on chunks as embeddingVersion (1=MiniLM-384, 2=nomic-256, 3=bge-small-384). */
+  version: number;
+}
+
+export function getEmbeddingModelProfile(modelName?: string): EmbeddingModelProfile {
+  const name = (modelName ?? getEmbeddingModelName()).toLowerCase();
+  if (name.includes('bge-')) {
+    return {
+      queryPrefix: 'Represent this sentence for searching relevant passages: ',
+      alwaysPrefixQuery: true,
+      similarityFloor: 0.55,
+      preferenceFloor: 0.45,
+      aggregationFloor: 0.48,
+      dupCheck: 0.85,
+      dupReinforce: 0.9,
+      dupAccept: 0.95,
+      version: 3,
+    };
+  }
+  if (name.includes('nomic')) {
+    return {
+      queryPrefix: 'search_query: ',
+      alwaysPrefixQuery: true,
+      similarityFloor: 0.4,
+      preferenceFloor: 0.3,
+      aggregationFloor: 0.33,
+      dupCheck: 0.8,
+      dupReinforce: 0.85,
+      dupAccept: 0.92,
+      version: 2,
+    };
+  }
+  // MiniLM-class symmetric models (the pre-v1.1 default).
+  return {
+    queryPrefix: 'search query: ',
+    alwaysPrefixQuery: false,
+    similarityFloor: 0.25,
+    preferenceFloor: 0.15,
+    aggregationFloor: 0.18,
+    dupCheck: 0.75,
+    dupReinforce: 0.8,
+    dupAccept: 0.9,
+    version: 1,
+  };
+}
 
 // The transformers.js pipeline returns a callable feature-extraction
 // function. The library's TS types are messy so we keep `unknown` here
@@ -132,10 +220,10 @@ async function getExtractor(): Promise<ExtractorFn> {
   if (!_extractorLoading) {
     _extractorLoading = (async () => {
       const { pipeline } = await import('@huggingface/transformers');
-      const modelName = process.env.ENGRAM_EMBEDDING_MODEL ?? process.env.SMART_MEMORY_EMBEDDING_MODEL ?? 'Xenova/all-MiniLM-L6-v2';
+      const modelName = getEmbeddingModelName();
       const device = getDevice();
       console.error(`przm-memory: loading embedding model ${modelName} (device: ${device})...`);
-      console.error(`przm-memory: first-time setup downloads ~23MB (one-time, then cached at ~/.cache/huggingface)`);
+      console.error(`przm-memory: first-time setup downloads the model once, then caches at ~/.cache/huggingface`);
       const progress_callback = makeProgressReporter();
       const loaded = await pipeline('feature-extraction', modelName, { device, progress_callback } as never);
       _extractor = loaded as unknown as ExtractorFn;

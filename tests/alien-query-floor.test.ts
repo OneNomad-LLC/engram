@@ -1,28 +1,35 @@
 /**
  * Alien-query retrieval-floor calibration test.
  *
- * Per Engram architecture-patterns §2: the 0.25 vector-similarity floor
+ * Per Engram architecture-patterns §2: the vector-similarity floor
  * exists to drop weak semantic matches that would otherwise let the
  * model interpolate hallucinations between low-confidence candidates.
  * "Calibrated" means: queries about topics genuinely absent from the
  * corpus must NOT return strong matches.
  *
+ * Floors live in the per-model-family profile (getEmbeddingModelProfile
+ * in src/llm.ts) because similarity distributions shift by family. The
+ * measured bands on this corpus:
+ *
+ *   family        alien noise (top sims)   on-topic     ceiling
+ *   MiniLM-class  up to ~0.40              ~0.5+        0.45
+ *   BGE v1.5      0.37-0.50 (mean 0.43)    0.72-0.80    0.55
+ *
  * This test is the calibration artifact:
  *   1. Seed a tight, single-topic corpus (Pyre + Cortex development).
  *   2. Define an "alien" query set covering wildly unrelated topics
  *      (cooking, gardening, classical music, plumbing, etc.).
- *   3. For each alien query, run vectorSearch with NO floor, observe
- *      the max similarity score.
- *   4. Assert the max stays under a calibrated ceiling (0.45). If a
+ *   3. For each alien query, embed with the production query prefix and
+ *      observe the max cosine similarity against the corpus.
+ *   4. Assert the max stays under the family's calibrated ceiling. If a
  *      future model swap, embedding change, or contextual-prefix tweak
  *      drives alien queries above this ceiling, this test fails and
- *      forces a deliberate re-calibration of the production floor.
+ *      forces a deliberate re-calibration of the profile floors.
  *   5. Sanity-check with control queries (about the corpus topic) that
- *      DO survive the production 0.25 floor — guards against
- *      over-tightening.
+ *      DO survive the production floor — guards against over-tightening.
  *
- * Skipped when ENGRAM_SKIP_EMBED=1 — the local embedding model
- * (Xenova/all-MiniLM-L6-v2) downloads ~23MB on first run, which is
+ * Skipped when ENGRAM_SKIP_EMBED=1 — the local embedding model downloads
+ * once on first run (~34MB for the default bge-small), which is
  * unfriendly to CI environments that opt out. Run locally with
  * `node --import tsx --test tests/alien-query-floor.test.ts`.
  */
@@ -40,7 +47,7 @@ import { join } from 'node:path';
 process.env.ENGRAM_NO_AUTO_CLOUD = '1';
 
 import { Storage, type StoredChunk } from '../src/storage.js';
-import { embed } from '../src/llm.js';
+import { embed, getEmbeddingModelProfile } from '../src/llm.js';
 import { search } from '../src/search.js';
 import { loadConfig } from '../src/config.js';
 import { cosineSimilarity } from '../src/utils.js';
@@ -110,10 +117,15 @@ const CONTROL_QUERIES = [
   'What is the inbox watcher in Pyre?',
 ];
 
-/** Calibrated ceiling: NO alien query may produce a vector similarity
- *  above this. Sits comfortably above the production 0.25 floor with
- *  margin so legitimate matches still pass while alien hits get cut. */
-const ALIEN_CEILING = 0.45;
+/** Calibrated ceilings per model family: NO alien query may produce a
+ *  vector similarity above these. MiniLM's 0.45 sits above its 0.25
+ *  production floor by design (the floor is deliberately permissive and
+ *  the RRF/keyword layers do the ranking); BGE's 0.55 equals its floor
+ *  because the BGE noise band (measured max 0.503) runs right up to it. */
+const PROFILE = getEmbeddingModelProfile();
+const ALIEN_CEILING = PROFILE.version === 3 ? 0.55 : 0.45;
+/** Query-side prefix exactly as search.ts builds it in production. */
+const QUERY_PREFIX = PROFILE.alwaysPrefixQuery ? PROFILE.queryPrefix : 'search query: ';
 
 async function tmpStorage() {
   const dir = mkdtempSync(join(tmpdir(), 'engram-alien-floor-'));
@@ -159,7 +171,7 @@ function makeChunk(id: string, content: string, embedding: number[]): StoredChun
 }
 
 describe('alien-query retrieval floor calibration', { skip: SHOULD_SKIP }, () => {
-  it('vector similarity for alien queries stays under the calibrated ceiling (0.45)', async () => {
+  it('vector similarity for alien queries stays under the calibrated ceiling', async () => {
     // This is the architecture-pattern §2 calibration: pure vector
     // similarity, no keyword/boost stack. The production 0.25 floor in
     // search.ts only filters at the vector stage. So this test embeds
@@ -185,7 +197,7 @@ describe('alien-query retrieval floor calibration', { skip: SHOULD_SKIP }, () =>
 
     const alienScores: Array<{ query: string; topSim: number }> = [];
     for (const q of ALIEN_QUERIES) {
-      const qEmb = await embed(config, q, config.enableContextualPrefix ? 'search query: ' : undefined);
+      const qEmb = await embed(config, q, QUERY_PREFIX);
       if (qEmb.length === 0) {
         console.warn('alien-floor: query embedding unavailable, skipping');
         return;
@@ -210,11 +222,11 @@ describe('alien-query retrieval floor calibration', { skip: SHOULD_SKIP }, () =>
     assert.ok(
       maxSim < ALIEN_CEILING,
       `Max alien-query vector similarity ${maxSim.toFixed(3)} >= ceiling ${ALIEN_CEILING}.\n` +
-      `If the embedding model, contextual prefix, or embedding dim changed, recalibrate the production floor in src/search.ts (currently 0.25).${detail}`,
+      `If the embedding model, contextual prefix, or embedding dim changed, recalibrate the profile floors in src/llm.ts.${detail}`,
     );
   });
 
-  it('full pipeline rarely leaks alien results past the 0.25 vector floor', async () => {
+  it('full pipeline rarely leaks alien results past the vector floor', async () => {
     // Companion check: when we run the full search() pipeline (vector
     // floor + IDF keyword + boosts + spreading activation), how often
     // do alien queries leak through anyway? IDF keyword scoring can
@@ -261,7 +273,7 @@ describe('alien-query retrieval floor calibration', { skip: SHOULD_SKIP }, () =>
     }
   });
 
-  it('control queries about the corpus DO survive the 0.25 floor', async () => {
+  it('control queries about the corpus DO survive the production floor', async () => {
     const { storage, cleanup } = await tmpStorage();
     try {
       const config = loadConfig();

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { SmartMemoryConfig } from './types.js';
 import type { StoredChunk } from './storage.js';
 import { Storage } from './storage.js';
-import { embed, llmComplete, isLlmAvailable } from './llm.js';
+import { embed, llmComplete, isLlmAvailable, getEmbeddingModelProfile } from './llm.js';
 import { cosineSimilarity, buildContextPrefix } from './utils.js';
 
 /**
@@ -83,7 +83,7 @@ export async function consolidateEpisodic(
       difficulty: 0.2,
       consolidationLevel: 1,
       sourceChunkIds: cluster.map(c => c.id),
-      embeddingVersion: 1,
+      embeddingVersion: getEmbeddingModelProfile().version,
       origin: 'derived',
     };
 

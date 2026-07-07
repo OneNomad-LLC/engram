@@ -5,12 +5,13 @@ import { z } from 'zod';
 import { Storage } from './storage.js';
 import { buildUpdateMetadataPatch, } from './update-metadata.js';
 import { loadConfig } from './config.js';
-import { isLlmAvailable, warmEmbeddings } from './llm.js';
+import { isLlmAvailable, warmEmbeddings, getEmbeddingModelName, getEmbeddingModelProfile } from './llm.js';
+import { checkEmbeddingMeta, readEmbeddingMeta } from './reembed.js';
+import { runMaintenance, maintenanceOverdue, autoMaintainEnabled, maintainIntervalMs, } from './maintenance.js';
 import { getVersion } from './version.js';
 import { search, selectRelevant, formatRecalledMemories } from './search.js';
 import { graphAwareRerank, graphAwareRerankPPR } from './graph-rerank.js';
 import { extractFromConversation } from './extractor.js';
-import { consolidate } from './consolidator.js';
 import { extractRules, formatRulesForPrompt } from './procedural.js';
 import { recordRecallOutcome } from './outcome.js';
 import { mem0Extract } from './mem0.js';
@@ -20,7 +21,7 @@ import { addTriple, replaceTriple, queryGraph, getTimeline, invalidateTriple, ge
 import { writeDiaryEntry, readDiary, listDiaryDates } from './diary.js';
 import { importConversation } from './importer.js';
 import { runGovernanceCheck, detectContradictions } from './governance.js';
-import { syncBridge, loadBridgeFile } from './procedural-bridge.js';
+import { loadBridgeFile } from './procedural-bridge.js';
 import { writeHandoff, readHandoff, listHandoffs } from './handoff.js';
 import { assessPressure } from './context-pressure.js';
 import { listRecentTraces, gcOldTraces } from './retrieval-trace.js';
@@ -139,6 +140,9 @@ server.registerTool('memory-search', {
             createdAt: r.chunk.createdAt || undefined,
             importance: r.chunk.importance,
             score: Math.round(r.score * 1000) / 1000,
+            ...(r.vectorSimilarity !== undefined
+                ? { similarity: Math.round(r.vectorSimilarity * 1000) / 1000 }
+                : {}),
         })),
     });
 });
@@ -241,17 +245,25 @@ server.registerTool('memory-ingest', {
     const storage = await ensureStorage();
     // Auto duplicate check (replaces old engram-check-duplicate tool). Callers
     // writing intentional refinements can bypass via skipDedupe=true.
+    //
+    // Thresholds run against vectorSimilarity, not the composite score:
+    // under RRF the composite is a rank-fusion value capped near ~0.07, so
+    // the old `score >= 0.75` check could never fire and dedupe was inert.
+    // Threshold values come from the model profile (similarity bands are
+    // model-family specific).
     if (!skipDedupe) {
+        const dup = getEmbeddingModelProfile();
         const dupeResults = await search(config, storage, content, 5);
-        const similar = dupeResults.filter(r => r.score >= 0.75);
+        const similar = dupeResults.filter(r => (r.vectorSimilarity ?? 0) >= dup.dupCheck);
         if (similar.length > 0) {
             const top = similar[0];
+            const topSim = top.vectorSimilarity ?? 0;
             // Backlog (memory-ingest dup actionable response): give the caller
             // a clear forward path so they don't have to guess between
             // accept-existing / retry-skipDedupe / give-up.
-            const recommendation = top.score >= 0.9
+            const recommendation = topSim >= dup.dupAccept
                 ? 'accept_existing'
-                : top.score >= 0.8
+                : topSim >= dup.dupReinforce
                     ? 'reinforce_existing'
                     : 'force_write_if_intentional_refinement';
             const nextAction = recommendation === 'accept_existing'
@@ -268,6 +280,7 @@ server.registerTool('memory-ingest', {
                     id: r.chunk.id,
                     content: r.chunk.content,
                     score: Math.round(r.score * 1000) / 1000,
+                    similarity: Math.round((r.vectorSimilarity ?? 0) * 1000) / 1000,
                 })),
             });
         }
@@ -287,6 +300,19 @@ server.registerTool('memory-ingest', {
             ...(createdAt ? { createdAt } : {}),
             tier,
         }]);
+    // Preference/correction memories are exactly the raw material the
+    // procedural-rule extractor exists for, and before this the extractor
+    // only ran on a manual memory-extract call nobody made — the rules
+    // table stayed empty forever. Extraction is pattern-gated (or LLM-
+    // judged when a key is set), so descriptive content that isn't a
+    // directive simply produces no rule. Failures never block the ingest.
+    const effectiveType = chunks[0]?.type ?? type;
+    if (effectiveType === 'preference' || effectiveType === 'correction') {
+        try {
+            await extractRules(config, storage, [{ role: 'user', content }]);
+        }
+        catch { /* rule extraction is best-effort */ }
+    }
     return json({
         ingested: chunks.length,
         memory: chunks[0] ? {
@@ -447,16 +473,8 @@ server.registerTool('memory-maintain', {
     inputSchema: z.object({}),
 }, async () => {
     const storage = await ensureStorage();
-    const stats = await consolidate(storage, config);
-    // Auto-sync procedural bridge during maintenance
-    let bridgeSync = { exported: 0, imported: 0, reinforced: 0, conflicts: 0 };
-    try {
-        bridgeSync = await syncBridge(storage);
-    }
-    catch {
-        // Bridge sync is best-effort
-    }
-    return json({ action: 'consolidation', ...stats, bridge: bridgeSync });
+    const result = await runMaintenance(config, storage);
+    return json({ action: 'consolidation', ...result });
 });
 server.registerTool('memory-rules', {
     title: 'Procedural Rules',
@@ -554,7 +572,12 @@ server.registerTool('memory-stats', {
         bridge,
         diaryEntries: diaryDates.length,
         llmAvailable: isLlmAvailable(),
-        embeddingModel: process.env.ENGRAM_EMBEDDING_MODEL ?? process.env.SMART_MEMORY_EMBEDDING_MODEL ?? 'Xenova/all-MiniLM-L6-v2',
+        embeddingModel: getEmbeddingModelName(),
+        // Which model the stored vectors were embedded with, and whether a
+        // reembed run is needed to bring the corpus into the active model's
+        // space. corpusEmbeddedWith null = pre-marker legacy store.
+        corpusEmbeddedWith: readEmbeddingMeta(config.dataDir)?.model ?? null,
+        reembedNeeded: (await checkEmbeddingMeta(config, storage)).mismatch,
         sessionTask: state.currentTask || null,
     });
 });
@@ -1152,7 +1175,7 @@ async function main() {
     console.error('przm Memory MCP server running on stdio');
     console.error(`Data dir: ${config.dataDir}`);
     console.error(`LLM: ${isLlmAvailable() ? 'enabled' : 'disabled (heuristic mode)'}`);
-    console.error(`Embeddings: local (${process.env.ENGRAM_EMBEDDING_MODEL ?? process.env.SMART_MEMORY_EMBEDDING_MODEL ?? 'Xenova/all-MiniLM-L6-v2'})`);
+    console.error(`Embeddings: local (${getEmbeddingModelName()})`);
     console.error(`Mem0: ${config.mem0ApiKey ? 'enabled' : 'disabled'}`);
     console.error(`Retrieval traces: ${config.enableRetrievalTraces ? `enabled (${config.retrievalTraceRetentionDays}d retention)` : 'disabled'}`);
     // Best-effort trace GC on startup. Drops day-directories older than
@@ -1166,6 +1189,58 @@ async function main() {
     // typical user "what should I ask?" think-time runs in parallel
     // with this and usually fully overlaps it.
     void warmEmbeddings();
+    // Embedding-space check: stored vectors must be in the active model's
+    // space or search quietly degrades. Warn loudly on mismatch — the fix
+    // is a one-time `przm-memory-mcp reembed`. Never blocks boot.
+    void (async () => {
+        try {
+            const check = await checkEmbeddingMeta(config, await ensureStorage());
+            if (check.mismatch) {
+                console.error(`przm-memory: WARNING — stored vectors were embedded with ` +
+                    `${check.storedModel ?? `a pre-marker install (assumed MiniLM)`} but the active model is ` +
+                    `${check.currentModel}. Search quality is degraded until you run: przm-memory-mcp reembed`);
+            }
+        }
+        catch { /* advisory only */ }
+    })();
+    scheduleAutoMaintenance();
+}
+/**
+ * Self-scheduling maintenance. consolidate() used to run only when an
+ * agent explicitly called memory-maintain — in practice never, leaving
+ * every chunk frozen in short-term and the rules table empty. Now the
+ * server runs a pass shortly after boot when the last run is older than
+ * the interval (default 24h, PRZM_MEMORY_MAINTAIN_INTERVAL_HOURS), and
+ * keeps an interval timer for long-lived processes. Disable with
+ * PRZM_MEMORY_AUTO_MAINTAIN=0.
+ *
+ * The boot pass is delayed 20s so it never competes with the MCP
+ * handshake or the embedding warmup; both timers are unref'd so they
+ * don't hold the process open on shutdown.
+ */
+function scheduleAutoMaintenance() {
+    if (!autoMaintainEnabled()) {
+        console.error('przm-memory: auto-maintenance disabled (PRZM_MEMORY_AUTO_MAINTAIN=0)');
+        return;
+    }
+    const runIfOverdue = async () => {
+        if (!maintenanceOverdue(config.dataDir))
+            return;
+        try {
+            const storage = await ensureStorage();
+            const result = await runMaintenance(config, storage);
+            console.error(`przm-memory: auto-maintenance done — promoted ${result.promoted}, decayed ${result.decayed}, ` +
+                `merged ${result.merged}, linked ${result.linked}` +
+                (result.rulesBackfilled > 0 ? `, rule backfill over ${result.rulesBackfilled} chunks` : ''));
+        }
+        catch (err) {
+            console.error('przm-memory: auto-maintenance failed (will retry next interval):', err);
+        }
+    };
+    const bootTimer = setTimeout(() => void runIfOverdue(), 20_000);
+    bootTimer.unref();
+    const interval = setInterval(() => void runIfOverdue(), Math.min(maintainIntervalMs(), 3_600_000));
+    interval.unref();
 }
 main().catch(err => {
     console.error('Fatal error:', err);

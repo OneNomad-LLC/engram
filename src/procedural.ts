@@ -163,6 +163,22 @@ const DIRECTIVE_PATTERNS: Array<{
     domain: 'preference',
     extract: (m) => `Prefer ${m[1].trim()} over ${m[2].trim()}`,
   },
+  // "rule: X" / "rule set by Matt: X" — how explicit directives commonly
+  // arrive via memory-ingest (type=preference/correction) rather than as
+  // raw conversation
+  {
+    test: /\brule(?:\s+set)?(?:\s+by\s+\w+)?\s*:\s*(.{10,150})/i,
+    domain: 'general',
+    extract: (m) => m[1].trim(),
+  },
+  // "prefers X" / "I prefer X" without an explicit alternative — the
+  // dominant phrasing of stored preference memories ("Matt prefers
+  // TypeScript for new projects")
+  {
+    test: /\bprefers?\s+((?!.{0,40}\b(?:over|instead of)\b).{5,80})/i,
+    domain: 'preference',
+    extract: (_m, sentence) => sentence.trim(),
+  },
   // "from now on" / "going forward"
   {
     test: /\b(?:from now on|going forward|in the future)\b[,.]?\s*(.{10,120})/i,

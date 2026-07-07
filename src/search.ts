@@ -1,7 +1,7 @@
 import type { SmartMemoryConfig, SearchResult } from './types.js';
 import type { StoredChunk } from './storage.js';
 import { Storage } from './storage.js';
-import { embed, llmComplete } from './llm.js';
+import { embed, llmComplete, getEmbeddingModelProfile } from './llm.js';
 import { cosineSimilarity, estimateTokens } from './utils.js';
 import { rerank } from './reranker.js';
 import {
@@ -65,6 +65,11 @@ export async function search(
     : undefined;
 
   const scored = new Map<string, { chunk: StoredChunk; score: number }>();
+  // Raw vector-stage cosine similarity per chunk. RRF replaces `score`
+  // with rank-fusion values (~0.003-0.033) that only order results;
+  // consumers needing an absolute 0..1 scale (ingest dedupe, CLI
+  // --min-relevance) read this instead.
+  const vectorSimById = new Map<string, number>();
 
   // Pre-extract query signals for boosting
   const querySignals = extractQuerySignals(query, referenceDate);
@@ -75,11 +80,14 @@ export async function search(
 
   // ── Native ANN vector search via LanceDB ───────────────────────────
   let queryEmbedding: number[] | null = null;
+  const modelProfile = getEmbeddingModelProfile();
   try {
-    // Build the same contextual prefix used at ingest time so query and
-    // stored embeddings live in the same vector space.
-    const queryPrefix = config.enableContextualPrefix
-      ? 'search query: '
+    // Query-side prefix comes from the model profile. Asymmetric models
+    // (BGE, nomic) were trained with an instruction on the query side and
+    // need it unconditionally; symmetric MiniLM-class models keep the old
+    // behavior where the prefix rides the contextual-prefix flag.
+    const queryPrefix = (modelProfile.alwaysPrefixQuery || config.enableContextualPrefix)
+      ? modelProfile.queryPrefix
       : undefined;
     queryEmbedding = await embed(config, query, queryPrefix);
   } catch {
@@ -117,7 +125,12 @@ export async function search(
     const isAgg = querySignals.isAggregationQuery;
     const defaultMult = isPref ? 15 : isAgg ? 12 : 5;
     const defaultMax = isPref ? 150 : isAgg ? 120 : 50;
-    const defaultFloor = isPref ? 0.15 : isAgg ? 0.18 : 0.25;
+    // Floors come from the model profile — similarity distributions shift
+    // by model family, so a MiniLM-calibrated 0.25 floor passes pure noise
+    // under BGE and a BGE-calibrated floor blocks everything under MiniLM.
+    const defaultFloor = isPref
+      ? modelProfile.preferenceFloor
+      : isAgg ? modelProfile.aggregationFloor : modelProfile.similarityFloor;
 
     const candidatePool = Math.min(limit * (envPoolMult ?? defaultMult), envPoolMax ?? defaultMax);
     const similarityFloor = envFloor ?? defaultFloor;
@@ -135,6 +148,7 @@ export async function search(
       const similarity = 1 - distance;
       if (similarity > similarityFloor) {
         scored.set(chunk.id, { chunk, score: similarity });
+        vectorSimById.set(chunk.id, similarity);
         aboveFloor++;
       } else {
         belowFloor++;
@@ -464,7 +478,12 @@ export async function search(
     const tokens = estimateTokens(entry.chunk.content) + 10;
     if (tokensUsed + tokens > config.maxRecallTokens) break;
     if (results.length >= limit) break;
-    results.push({ chunk: entry.chunk, score: entry.score });
+    const vectorSimilarity = vectorSimById.get(entry.chunk.id);
+    results.push({
+      chunk: entry.chunk,
+      score: entry.score,
+      ...(vectorSimilarity !== undefined ? { vectorSimilarity } : {}),
+    });
     tokensUsed += tokens;
     toUpdate.push({ id: entry.chunk.id, recallCount: entry.chunk.recallCount + 1 });
   }

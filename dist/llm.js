@@ -8,8 +8,10 @@ import OpenAI from 'openai';
  *   Override with ENGRAM_MODEL env var.
  *
  * Embeddings: Local ONNX model via @huggingface/transformers.
- *   Default model: Xenova/all-MiniLM-L6-v2 (384-dim, ~23 MB, cached after first use).
- *   Override with ENGRAM_EMBEDDING_MODEL env var.
+ *   Default model: Xenova/bge-small-en-v1.5 (384-dim, ~34 MB, cached after first use).
+ *   Override with PRZM_MEMORY_EMBEDDING_MODEL env var (legacy: ENGRAM_EMBEDDING_MODEL).
+ *   After changing the model, run `przm-memory-mcp reembed` — stored vectors
+ *   live in the old model's space and mixed-space search silently degrades.
  *
  * GPU acceleration:
  *   Set ENGRAM_DEVICE=dml   for AMD/Intel/NVIDIA DirectML (Windows)
@@ -53,6 +55,57 @@ export async function llmComplete(_config, systemPrompt, userMessage, opts) {
         ],
     });
     return response.choices[0]?.message?.content ?? '';
+}
+// ── Local Embeddings ────────────────────────────────────────────────
+export const DEFAULT_EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5';
+/** Default before v1.1 — stores created back then hold vectors in this model's space. */
+export const LEGACY_EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2';
+export function getEmbeddingModelName() {
+    return process.env.PRZM_MEMORY_EMBEDDING_MODEL
+        ?? process.env.ENGRAM_EMBEDDING_MODEL
+        ?? process.env.SMART_MEMORY_EMBEDDING_MODEL
+        ?? DEFAULT_EMBEDDING_MODEL;
+}
+export function getEmbeddingModelProfile(modelName) {
+    const name = (modelName ?? getEmbeddingModelName()).toLowerCase();
+    if (name.includes('bge-')) {
+        return {
+            queryPrefix: 'Represent this sentence for searching relevant passages: ',
+            alwaysPrefixQuery: true,
+            similarityFloor: 0.55,
+            preferenceFloor: 0.45,
+            aggregationFloor: 0.48,
+            dupCheck: 0.85,
+            dupReinforce: 0.9,
+            dupAccept: 0.95,
+            version: 3,
+        };
+    }
+    if (name.includes('nomic')) {
+        return {
+            queryPrefix: 'search_query: ',
+            alwaysPrefixQuery: true,
+            similarityFloor: 0.4,
+            preferenceFloor: 0.3,
+            aggregationFloor: 0.33,
+            dupCheck: 0.8,
+            dupReinforce: 0.85,
+            dupAccept: 0.92,
+            version: 2,
+        };
+    }
+    // MiniLM-class symmetric models (the pre-v1.1 default).
+    return {
+        queryPrefix: 'search query: ',
+        alwaysPrefixQuery: false,
+        similarityFloor: 0.25,
+        preferenceFloor: 0.15,
+        aggregationFloor: 0.18,
+        dupCheck: 0.75,
+        dupReinforce: 0.8,
+        dupAccept: 0.9,
+        version: 1,
+    };
 }
 let _extractor = null;
 let _extractorLoading = null;
@@ -109,10 +162,10 @@ async function getExtractor() {
     if (!_extractorLoading) {
         _extractorLoading = (async () => {
             const { pipeline } = await import('@huggingface/transformers');
-            const modelName = process.env.ENGRAM_EMBEDDING_MODEL ?? process.env.SMART_MEMORY_EMBEDDING_MODEL ?? 'Xenova/all-MiniLM-L6-v2';
+            const modelName = getEmbeddingModelName();
             const device = getDevice();
             console.error(`przm-memory: loading embedding model ${modelName} (device: ${device})...`);
-            console.error(`przm-memory: first-time setup downloads ~23MB (one-time, then cached at ~/.cache/huggingface)`);
+            console.error(`przm-memory: first-time setup downloads the model once, then caches at ~/.cache/huggingface`);
             const progress_callback = makeProgressReporter();
             const loaded = await pipeline('feature-extraction', modelName, { device, progress_callback });
             _extractor = loaded;

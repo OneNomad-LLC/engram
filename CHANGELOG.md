@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Default embedding model upgraded to `Xenova/bge-small-en-v1.5`**
+  (same 384 dims, substantially better retrieval than MiniLM-L6-v2 on
+  BEIR-style benchmarks). Model selection moved behind
+  `getEmbeddingModelName()` with a new `PRZM_MEMORY_EMBEDDING_MODEL`
+  env var (legacy `ENGRAM_EMBEDDING_MODEL` / `SMART_MEMORY_EMBEDDING_MODEL`
+  still honored). Retrieval knobs that are model-family-specific —
+  query-side prefix, vector similarity floors, dedupe thresholds — now
+  come from a per-family profile (`getEmbeddingModelProfile()`), with
+  BGE floors calibrated empirically against the alien-query corpus
+  (alien noise tops out at 0.503, on-topic at 0.72+, floor 0.55).
+
+- **Consolidation now runs automatically.** `consolidate()` used to fire
+  only on a manual `memory-maintain` call, which in practice never
+  happened — chunks sat frozen in short-term forever. The server now
+  schedules a maintenance pass ~20s after boot when the last run is
+  older than `PRZM_MEMORY_MAINTAIN_INTERVAL_HOURS` (default 24), plus
+  an interval timer for long-lived processes. Disable with
+  `PRZM_MEMORY_AUTO_MAINTAIN=0`. State in `<dataDir>/maintenance.json`.
+
+- **Procedural rules extract automatically.** `memory-ingest` with
+  `type: preference` or `type: correction` now runs the rule extractor
+  over the content (LLM when a key is set, heuristic patterns
+  otherwise). The first maintenance pass also replays existing
+  preference/correction chunks through the extractor once (stamped in
+  `maintenance.json` so confidence is never re-reinforced). New
+  heuristic patterns for the `rule: ...` and bare `prefers X`
+  phrasings that ingested memories actually use.
+
+### Added
+
+- **`przm-memory-mcp reembed`** — re-embeds the whole corpus with the
+  active model (with `--dry-run`). An `embedding-meta.json` marker in
+  the data dir records which model the corpus was embedded with; the
+  server warns loudly at boot when it mismatches the active model, and
+  `memory-stats` reports `corpusEmbeddedWith` / `reembedNeeded`.
+  Stores that predate the marker are assumed to be MiniLM (the old
+  default). Resolves DEBT-008.
+
+### Fixed
+
+- **Ingest dedupe was inert under RRF.** The duplicate check filtered
+  on `score >= 0.75`, but RRF composite scores top out near ~0.07, so
+  no ingest was ever flagged as a duplicate. Search results now carry
+  `vectorSimilarity` (raw cosine, 0..1) alongside the composite score;
+  dedupe and its recommendation ladder run against that, with
+  thresholds from the model profile. `memory-search` results and the
+  CLI expose the same field, and CLI `--min-relevance` filters on it.
+
 ## [1.0.3] - 2026-05-21
 
 ### Fixed
