@@ -41,6 +41,11 @@ Per-category:
   Embedding model           Xenova/all-MiniLM-L6-v2 (23MB, runs on CPU)
 ```
 
+> Published benchmark numbers were measured under the pre-1.1 default
+> (MiniLM-L6-v2). v1.1.0 changed the default to bge-small-en-v1.5,
+> which scores substantially higher on BEIR-style retrieval; the
+> LongMemEval/LoCoMo suites have not been re-run under it yet.
+
 For details on recent benchmark optimization work including regression fixes, sub-session chunking, and reranking analysis, see [docs/benchmark-optimization.md](docs/benchmark-optimization.md).
 
 ### How to read these numbers
@@ -597,7 +602,7 @@ Everything lives locally:
 ### Dependencies
 
 - **LanceDB** for the embedded vector database, handles ANN search natively
-- **@huggingface/transformers** for local embedding inference (Xenova/all-MiniLM-L6-v2, 384 dimensions, 23MB)
+- **@huggingface/transformers** for local embedding inference (Xenova/bge-small-en-v1.5 by default, 384 dimensions, ~34MB; swap models with `PRZM_MEMORY_EMBEDDING_MODEL` + `przm-memory-mcp reembed`)
 - **openai** (optional) for LLM-powered extraction and reranking via OpenRouter
 - **mem0ai** (optional) for Mem0 cloud extraction
 - **@modelcontextprotocol/sdk** for the MCP server protocol
@@ -704,7 +709,7 @@ Runtime: ~2–4 min at default settings.
 
 This plugin contacts exactly two services:
 
-1. **HuggingFace Hub** for a one-time model download on first run (~23MB), cached after that
+1. **HuggingFace Hub** for a one-time model download on first run (~34MB for the default bge-small), cached after that
 2. **Mem0 API**, only when `extractionProvider` is `mem0` or `both`
 
 If you set `OPENROUTER_API_KEY`, it contacts the OpenRouter API for LLM features (you pick the model provider). Without any API keys, everything runs fully local.
