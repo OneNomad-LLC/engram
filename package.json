@@ -1,6 +1,6 @@
 {
   "name": "@onenomad/przm-memory",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "mcpName": "io.github.onenomad-llc/przm-memory",
   "description": "przm Memory — local-first memory MCP server for AI agents. Part of the przm AI reliability suite. LLM-powered extraction, hybrid ANN search, tier lifecycle, spreading activation, procedural rules, real-time ingest, and session-state.",
   "type": "module",
