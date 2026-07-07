@@ -520,10 +520,11 @@ The MCP server exposes 20 tools across six groups. Several earlier tools (`engra
 
 ## Slash Commands
 
-These work in any MCP-compatible client (Claude Code, Cursor, etc.). The MCP server advertises them in its instructions so the agent knows how to handle them. SKILL.md files are also included for platforms that discover skills from the filesystem.
+These work in any MCP-compatible client (Claude Code, Cursor, etc.). `/onboard` is a real MCP prompt the server registers, so it shows up as a slash command automatically with no install. The rest are advertised in the MCP server instructions and are also shipped as `.claude/commands` files (see below) for clients that discover commands from the filesystem.
 
 | Command | What it does |
 |---------|-------------|
+| `/onboard` | **Fresh-install setup.** Interviews you for your durable rules and preferences (identity/attribution, emails, communication style, code + workflow conventions, hard rules, project scoping) and stores each as a procedural memory that persists and auto-loads every session — syncing into tone too when przm-voice is connected. Built in as an MCP prompt, so it needs no install and appears automatically once the server is connected. Re-run anytime to add more. |
 | `/memory-source <engram\|off\|hybrid>` | Switch memory backend. "engram" uses przm Memory exclusively, "off" disables all persistent memory, "hybrid" runs przm Memory alongside native client memory. |
 | `/recall <query>` | Search memories using the full hybrid pipeline (vector + keyword + temporal + KG + spreading activation). Results presented conversationally. |
 | `/forget <what>` | Find and remove or correct specific memories. Shows matches and confirms before acting. |

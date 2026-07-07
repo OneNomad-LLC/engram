@@ -5,7 +5,21 @@ All notable changes to `@onenomad/przm-memory` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.2] - 2026-07-07
+## [1.2.0] - 2026-07-07
+
+### Added
+
+- **`onboard` prompt (slash command).** The server now exposes an MCP
+  prompt that Claude Code surfaces as a slash command (e.g.
+  `/przm-memory (MCP) -> onboard`). It runs a guided onboarding for a
+  fresh install: assess what rules already exist, interview the user for
+  their durable rules and preferences (identity/attribution, emails,
+  communication style, code + workflow conventions, hard rules, project
+  scoping), store each as a `preference`/`correction` memory so it
+  extracts into a procedural rule and (when przm-voice is connected)
+  syncs into tone, and optionally add a przm-memory usage block to
+  CLAUDE.md. Reachable on any MCP-connected install with no plugin or
+  file copying. Safe to re-run to add more.
 
 ### Fixed
 

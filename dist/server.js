@@ -1130,6 +1130,51 @@ server.registerTool('memory-import', {
     return json(result);
 });
 // ─────────────────────────────────────────────────────────────────────
+// PROMPTS (surface as slash commands in MCP clients, e.g. Claude Code)
+// ─────────────────────────────────────────────────────────────────────
+// The onboarding playbook. Returned as a user-role message when the
+// client invokes the `onboard` prompt, so the assistant runs the flow
+// against this same server's tools. Kept prescriptive but not rigid: the
+// point is to capture the user's DURABLE rules once and store them so they
+// persist and auto-load, without inventing preferences the user never
+// stated. Works standalone (memory only) and lights up extra steps when
+// przm-voice is also connected.
+const ONBOARD_PLAYBOOK = `You are running przm-memory onboarding for this user. Goal: capture the durable rules and preferences that should shape how you work for them across ALL future sessions, and store them so they persist and auto-load. Store only what the user actually tells you — never invent preferences.
+
+Work through these phases. Keep it conversational and batch your questions; this is a short setup, not an interrogation.
+
+1. ASSESS what already exists.
+   - Call memory-stats and memory-rules. If proceduralRules is 0 and the chunk count is low, treat this as a fresh install. If rules already exist, this is a top-up: show them and ask what to add or change instead of starting over.
+   - If przm-voice is connected, call voice_profile to see any existing style profile and pinned feedback.
+   - Tell the user in one or two lines what's already set up (or that it's a blank slate).
+
+2. INTERVIEW. Ask in small batches (2-4 questions at a time). Capture at least:
+   - Identity & attribution: the name to use in commit authorship / file headers / PR authors. Any AI-attribution rule (e.g. never add a Co-Authored-By or "Generated with" trailer).
+   - Emails: which address for which context (personal vs work/client), and the rule for choosing.
+   - Communication: brief vs thorough by default; emoji and exclamation marks yes/no; tone (plain and direct vs warm); any phrasings or "AI tells" to avoid.
+   - Code & workflow: default language/stack; comment density; testing expectations; when to act autonomously vs ask first; commit and PR conventions.
+   - Hard rules: anything you must NEVER do.
+   - Project scoping: any rule that applies only to specific repos or clients (capture the scope).
+
+3. PERSIST each item as a durable memory. For every rule or preference, call memory-ingest with type "preference" (or type "correction" for a "never do X" rule). Phrase the content as an explicit directive so it extracts cleanly into a procedural rule — begin with "Always ...", "Never ...", "Prefer X over Y", or "rule: ...". Set an accurate domain ("global" for cross-project rules, or the project/client name for scoped ones). Ingest one memory per distinct rule, not a wall of text. If przm-voice is connected, ALSO record each communication/tone item with voice_signal type "explicit_feedback" (include the rule text as content) so tone adapts on the next turn.
+
+4. OFFER the CLAUDE.md integration block. Ask whether to add a przm-memory (+ przm-voice, if present) usage section to their ~/.claude/CLAUDE.md so every future session uses memory correctly: search memory at session start, ingest preferences/corrections as they occur, and write a handoff before /compact. Show the exact block first; only write it with explicit consent; APPEND, never overwrite existing content.
+
+5. CONFIRM. Call memory-rules to show the newly-seeded rules, then summarize what's configured and how it will apply going forward: memory-search surfaces these rules, the daily maintenance keeps them ranked and promoted, and (if voice is on) the procedural bridge syncs them into tone. Note they can re-run this anytime to add more.
+
+Reinforce or refine rules that already exist rather than creating duplicates. If the user is unsure on a question, skip it — a smaller set of real rules beats a large set of guesses.`;
+server.registerPrompt('onboard', {
+    title: 'Onboard: set up memory rules',
+    description: 'Bootstrap a fresh install: interview the user for their durable rules and preferences (identity, communication style, code/workflow conventions, hard rules) and store them as procedural memories that persist and auto-load across sessions. Safe to re-run to add more.',
+}, () => ({
+    messages: [
+        {
+            role: 'user',
+            content: { type: 'text', text: ONBOARD_PLAYBOOK },
+        },
+    ],
+}));
+// ─────────────────────────────────────────────────────────────────────
 // ENGRAM-* BACKWARD COMPATIBILITY ALIASES
 // ─────────────────────────────────────────────────────────────────────
 // Tool names were renamed from engram-* → memory-* in v1.0.0-beta.7.
