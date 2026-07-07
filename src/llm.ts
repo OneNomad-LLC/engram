@@ -120,12 +120,19 @@ export interface EmbeddingModelProfile {
 export function getEmbeddingModelProfile(modelName?: string): EmbeddingModelProfile {
   const name = (modelName ?? getEmbeddingModelName()).toLowerCase();
   if (name.includes('bge-')) {
+    // Floor calibration note: the synthetic alien-query corpus (short
+    // clean sentences) puts BGE on-topic sims at 0.72+, but real stored
+    // memories are long, multi-clause, and carry heavy contextual
+    // prefixes — live relevant hits land at ~0.46-0.55. The floor sits
+    // below the live relevance band and cuts only the bottom of the
+    // noise distribution (~0.37+), same positioning the 0.25 MiniLM
+    // floor had relative to its 0.45 noise ceiling.
     return {
       queryPrefix: 'Represent this sentence for searching relevant passages: ',
       alwaysPrefixQuery: true,
-      similarityFloor: 0.55,
-      preferenceFloor: 0.45,
-      aggregationFloor: 0.48,
+      similarityFloor: 0.42,
+      preferenceFloor: 0.35,
+      aggregationFloor: 0.38,
       dupCheck: 0.85,
       dupReinforce: 0.9,
       dupAccept: 0.95,

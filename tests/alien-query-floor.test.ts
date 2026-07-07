@@ -118,10 +118,14 @@ const CONTROL_QUERIES = [
 ];
 
 /** Calibrated ceilings per model family: NO alien query may produce a
- *  vector similarity above these. MiniLM's 0.45 sits above its 0.25
- *  production floor by design (the floor is deliberately permissive and
- *  the RRF/keyword layers do the ranking); BGE's 0.55 equals its floor
- *  because the BGE noise band (measured max 0.503) runs right up to it. */
+ *  vector similarity above these. The ceiling sits above the production
+ *  floor by design in both families — the floor is deliberately
+ *  permissive (it cuts only the bottom of the noise band; RRF/keyword
+ *  layers do the ranking) because real stored memories are long and
+ *  contextual-prefixed, which compresses query-to-chunk similarity well
+ *  below what this short-sentence corpus produces. MiniLM: floor 0.25,
+ *  ceiling 0.45. BGE: floor 0.42 (live relevant hits measure
+ *  ~0.46-0.55), ceiling 0.55 (synthetic alien max measured 0.503). */
 const PROFILE = getEmbeddingModelProfile();
 const ALIEN_CEILING = PROFILE.version === 3 ? 0.55 : 0.45;
 /** Query-side prefix exactly as search.ts builds it in production. */

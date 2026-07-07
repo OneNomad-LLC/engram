@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still honored). Retrieval knobs that are model-family-specific —
   query-side prefix, vector similarity floors, dedupe thresholds — now
   come from a per-family profile (`getEmbeddingModelProfile()`), with
-  BGE floors calibrated empirically against the alien-query corpus
-  (alien noise tops out at 0.503, on-topic at 0.72+, floor 0.55).
+  BGE floors calibrated empirically — first against the alien-query
+  corpus, then corrected against the live 1.3k-chunk store, where
+  long contextual-prefixed memories compress relevant hits to
+  ~0.46-0.55 (floor 0.42; synthetic alien noise tops out at 0.503).
 
 - **Consolidation now runs automatically.** `consolidate()` used to fire
   only on a manual `memory-maintain` call, which in practice never

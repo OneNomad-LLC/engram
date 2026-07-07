@@ -107,7 +107,7 @@ This is where the interesting stuff happens. A query goes through nine stages be
 
 **Stage 1: Signal Extraction.** Before any search happens, the query gets parsed for dates, entities (proper nouns), quoted phrases, and temporal language. If someone writes "What was Matt working on before he switched jobs in June?" the system extracts the date (June), the entity (Matt), and flags it as a temporal inference query because of the word "before."
 
-**Stage 2: Vector Search.** Standard ANN search against LanceDB using cosine distance on 384-dim embeddings. This handles the "find semantically similar stuff" part. Candidates must clear a similarity floor calibrated per model family (0.55 for the default bge-small, 0.25 for MiniLM-class models) — floors live in the model profile in `src/llm.ts` and the `tests/alien-query-floor.test.ts` calibration suite keeps them honest.
+**Stage 2: Vector Search.** Standard ANN search against LanceDB using cosine distance on 384-dim embeddings. This handles the "find semantically similar stuff" part. Candidates must clear a similarity floor calibrated per model family (0.42 for the default bge-small, 0.25 for MiniLM-class models) — floors live in the model profile in `src/llm.ts` and the `tests/alien-query-floor.test.ts` calibration suite keeps them honest.
 
 **Stage 3: IDF Keyword Scoring.** Rare terms in the query get weighted higher than common words. If you search for "Matt TypeScript" both terms will dominate scoring because they appear in relatively few memories. Proper nouns get an extra 1.5x boost. Results from this stage get blended with vector scores. The blend shifts toward keywords when entities are present, since names and specific nouns are better matched by exact text than by embedding similarity.
 
